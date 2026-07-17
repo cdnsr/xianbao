@@ -2,9 +2,12 @@
 #
 # On every push to main (except [skip ci]):
 # 1) Validate/decode Android keystore from GitHub Secrets
-# 2) Bump pubspec version (patch + build number) and commit back with [skip ci]
+# 2) Bump pubspec version (patch + internal build number) and commit back with [skip ci]
 # 3) flutter build apk --release --split-per-abi
 # 4) Publish public GitHub Release with APKs
+#
+# User-facing version is versionName only: 1.4.9 / 1.4.10 (no +build).
+# pubspec still stores name+code (e.g. 1.4.9+24) for Android versionCode.
 #
 # Required repository secrets:
 #   ANDROID_KEYSTORE_BASE64
@@ -111,15 +114,20 @@ jobs:
             exit 1
           fi
           if [[ ! "$code" =~ ^[0-9]+$ ]]; then
-            echo "Invalid versionCode in pubspec: $code" >&2
-            exit 1
+            # Allow "1.4.9" without +code; start build from 1
+            if [[ "$raw" == "$name" ]]; then
+              code=0
+            else
+              echo "Invalid versionCode in pubspec: $code" >&2
+              exit 1
+            fi
           fi
 
           IFS='.' read -r major minor patch <<< "$name"
           patch=$((patch + 1))
           new_name="${major}.${minor}.${patch}"
 
-          # Prefer strictly increasing code: max(old+1, run_number)
+          # Internal Android versionCode only (not shown in release title/APK name).
           run_no="${{ github.run_number }}"
           new_code=$((code + 1))
           if (( run_no > new_code )); then
@@ -128,13 +136,14 @@ jobs:
 
           new_full="${new_name}+${new_code}"
           sed -i -E "s/^version: .*/version: ${new_full}/" pubspec.yaml
-          echo "Bumped version: ${raw} -> ${new_full}"
+          echo "Bumped version: ${raw} -> ${new_full} (display: ${new_name})"
 
           {
             echo "version_name=${new_name}"
             echo "version_code=${new_code}"
             echo "version_full=${new_full}"
-            echo "tag=v${new_full}"
+            # Public tag / release / APK names use versionName only (e.g. v1.4.9).
+            echo "tag=v${new_name}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Commit and push version bump
@@ -146,7 +155,7 @@ jobs:
             echo "No version change to commit"
             exit 0
           fi
-          git commit -m "chore: bump version to ${{ steps.version.outputs.version_full }} [skip ci]"
+          git commit -m "chore: bump version to ${{ steps.version.outputs.version_name }} [skip ci]"
           for i in 1 2 3; do
             if git push origin HEAD:main; then
               exit 0
@@ -171,7 +180,7 @@ jobs:
         run: |
           set -euo pipefail
           out="build/app/outputs/flutter-apk"
-          ver="${{ steps.version.outputs.version_full }}"
+          ver="${{ steps.version.outputs.version_name }}"
           mkdir -p dist
           cp "$out/app-armeabi-v7a-release.apk" "dist/xianbao-v${ver}-armv7-release.apk"
           cp "$out/app-arm64-v8a-release.apk" "dist/xianbao-v${ver}-armv8-release.apk"
@@ -182,23 +191,22 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
-          name: xianbao ${{ steps.version.outputs.version_full }}
+          name: xianbao ${{ steps.version.outputs.version_name }}
           draft: false
           prerelease: false
           generate_release_notes: true
           body: |
-            ## 线报酷 ${{ steps.version.outputs.version_full }}
+            ## 线报酷 ${{ steps.version.outputs.version_name }}
 
             自动构建自 `main`（`${{ github.sha }}`）。
 
             ### 安装包（推荐真机 armv8）
-            - `xianbao-v${{ steps.version.outputs.version_full }}-armv8-release.apk`
-            - `xianbao-v${{ steps.version.outputs.version_full }}-armv7-release.apk`
-            - `xianbao-v${{ steps.version.outputs.version_full }}-x86_64-release.apk`
+            - `xianbao-v${{ steps.version.outputs.version_name }}-armv8-release.apk`
+            - `xianbao-v${{ steps.version.outputs.version_name }}-armv7-release.apk`
+            - `xianbao-v${{ steps.version.outputs.version_name }}-x86_64-release.apk`
 
             ### 版本
-            - versionName: `${{ steps.version.outputs.version_name }}`
-            - versionCode: `${{ steps.version.outputs.version_code }}`
+            - 版本号: `${{ steps.version.outputs.version_name }}`
           files: |
             dist/*.apk
         env:

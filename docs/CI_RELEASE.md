@@ -11,13 +11,16 @@
 
 版本策略（方案 B）：
 
+对外版本号仅为 **versionName**（1.4.9 / 1.4.10），不含 +数字，便于客户端检测更新。
+
+
 - 每次发版将 `pubspec.yaml` 的 **patch +1**（如 `1.4.7` → `1.4.8`）
 - `versionCode` = `max(旧值+1, github.run_number)`，保证单调递增
-- 回写仓库：`chore: bump version to x.y.z+N [skip ci]`
+- 回写仓库：`chore: bump version to x.y.z [skip ci]`（对外仅显示 x.y.z，pubspec 内部仍写 `x.y.z+code` 供 Android versionCode）
 
 产物命名：
 
-- `xianbao-v{versionName}+{versionCode}-armv8-release.apk`（真机推荐）
+- `xianbao-v{versionName}-armv8-release.apk`（真机推荐，如 `xianbao-v1.4.9-armv8-release.apk`）
 - `...-armv7-release.apk`
 - `...-x86_64-release.apk`
 
