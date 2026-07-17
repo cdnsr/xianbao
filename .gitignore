@@ -80,3 +80,10 @@ DEV_PROGRESS.md
 # === Keep for app repos ===
 # pubspec.lock is intentionally tracked for apps
 # /test/ is intentionally tracked
+
+# CI / local signing materials
+android/key.properties
+android/app/*.jks
+android/app/*.keystore
+upload-keystore.jks
+

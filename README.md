@@ -35,3 +35,14 @@ flutter build apk --release --split-per-abi
 - 无网站后台权限，仅基于公开网页 / 接口封装，不修改服务端。
 - 接口与页面结构分析见 `API_ANALYSIS.md`。
 - **请勿提交** Cookie、密钥、`local.properties`、登录会话等敏感文件。
+
+## 自动构建与发版
+
+推送到 `main` 后，GitHub Actions 会：
+
+1. 自动升高 `pubspec.yaml` 版本号并回写仓库  
+2. 使用 Secrets 中的 Android 签名密钥编译 release APK  
+3. 创建公开 GitHub Release 并上传分 ABI 安装包  
+
+配置说明见 [docs/CI_RELEASE.md](docs/CI_RELEASE.md)。
+
