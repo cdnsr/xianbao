@@ -5,7 +5,6 @@ import 'package:webview_flutter/webview_flutter.dart';
 import '../../services/app_state.dart';
 import '../../utils/cookie_bridge.dart';
 import '../../utils/webview_dark_theme.dart';
-import '../../widgets/update_dialog.dart';
 
 /// User center page using WebView (after login).
 class ProfilePage extends StatefulWidget {
@@ -143,11 +142,6 @@ class _ProfilePageState extends State<ProfilePage> {
         centerTitle: true,
         automaticallyImplyLeading: false,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.system_update_alt),
-            tooltip: '检查更新',
-            onPressed: () => UpdateCoordinator.checkManual(context),
-          ),
           IconButton(
             icon: const Icon(Icons.logout),
             tooltip: '退出登录',

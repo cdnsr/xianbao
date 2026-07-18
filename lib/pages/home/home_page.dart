@@ -8,6 +8,7 @@ import '../../services/app_state.dart';
 import '../../services/home_cache_service.dart';
 import '../../widgets/article_card.dart';
 import '../../widgets/pagination_bar.dart';
+import '../../widgets/about_dialog.dart';
 import '../article/article_detail_page.dart';
 import '../collect/collect_list_page.dart';
 
@@ -394,6 +395,15 @@ class _HomePageState extends State<HomePage> {
                 child: _categoriesLoaded
                     ? _buildCategoryTree(theme)
                     : const Center(child: CircularProgressIndicator()),
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.info_outline),
+                title: const Text('关于'),
+                onTap: () {
+                  Navigator.of(context).pop(); // close drawer
+                  showAboutAppDialog(context);
+                },
               ),
             ],
           ),

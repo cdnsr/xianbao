@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../services/update_service.dart';
 import '../utils/version_compare.dart';
+import 'about_dialog.dart';
 
 /// Shared entry points for auto / manual update checks.
 class UpdateCoordinator {
@@ -34,7 +35,7 @@ class UpdateCoordinator {
           await service.setFailTipTime(now);
           if (!context.mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('检查更新失败，请稍后在用户中心手动检查')),
+            const SnackBar(content: Text('检查更新失败，请稍后在侧边栏「关于」中手动检查')),
           );
         }
       }
@@ -43,7 +44,7 @@ class UpdateCoordinator {
     }
   }
 
-  /// Manual check from profile/login: always give feedback.
+  /// Manual check (e.g. About → 检查更新): use dedicated update window.
   static Future<void> checkManual(BuildContext context) async {
     if (_busy || _dialogVisible) {
       if (context.mounted) {
@@ -53,47 +54,7 @@ class UpdateCoordinator {
       }
       return;
     }
-    _busy = true;
-    final service = UpdateService();
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('正在检查更新…'),
-          duration: Duration(seconds: 2),
-        ),
-      );
-    }
-    try {
-      final result = await service.checkForUpdate();
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).hideCurrentSnackBar();
-
-      switch (result.status) {
-        case UpdateCheckStatus.hasUpdate:
-          await _showDialog(context, service, result, manual: true);
-          break;
-        case UpdateCheckStatus.upToDate:
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('已是最新版本（${result.currentVersion}）'),
-            ),
-          );
-          break;
-        case UpdateCheckStatus.error:
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                '检查更新失败${result.errorMessage != null ? '：${result.errorMessage}' : ''}',
-              ),
-            ),
-          );
-          break;
-        case UpdateCheckStatus.checking:
-          break;
-      }
-    } finally {
-      _busy = false;
-    }
+    await showUpdateCheckDialog(context);
   }
 
   static Future<void> _showDialog(
