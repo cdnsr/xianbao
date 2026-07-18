@@ -12,8 +12,9 @@ class UpdateCoordinator {
   static bool _busy = false;
   static bool _dialogVisible = false;
 
-  /// Silent startup check: only show dialog when a newer version is available
-  /// and not ignored. Check-failure toast at most once per 7 days.
+  /// App startup auto-check (original flow): only show UpdateDialog when a
+  /// newer version is available and not ignored. Fail toast ≤ once / 7 days.
+  /// Manual checks use About → showUpdateCheckDialog, not this path.
   static Future<void> checkOnStartup(BuildContext context) async {
     if (_busy || _dialogVisible) return;
     _busy = true;

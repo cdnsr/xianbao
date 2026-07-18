@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../services/update_service.dart';
 import '../utils/version_compare.dart';
@@ -74,12 +75,30 @@ class AboutAppDialog extends StatelessWidget {
                 color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 12),
             Text(
-              '线报信息聚合客户端',
+              '作者：cndsr',
               textAlign: TextAlign.center,
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.outline,
+              ),
+            ),
+            const SizedBox(height: 4),
+            InkWell(
+              onTap: () {
+                launchUrl(
+                  Uri.parse('https://github.com/cdnsr/xianbao'),
+                  mode: LaunchMode.externalApplication,
+                );
+              },
+              child: Text(
+                '开源：https://github.com/cdnsr/xianbao',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.primary,
+                  decoration: TextDecoration.underline,
+                  decorationColor: theme.colorScheme.primary,
+                ),
               ),
             ),
             const SizedBox(height: 20),
