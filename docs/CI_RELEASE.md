@@ -100,3 +100,39 @@ flutter build apk --release --split-per-abi
 
 **tag 已存在**  
 → 每次 patch 与 versionCode 递增，一般不会冲突；若手动删 tag 后重跑，注意勿复用相同 tag。
+
+---
+
+## 客户端检测更新
+
+对齐 lx-music：客户端读取仓库内 `publish/version.json`（不含 `+build` 的 versionName）。
+
+| 镜像（按顺序尝试） | URL |
+|--------------------|-----|
+| GitHub raw | `https://raw.githubusercontent.com/cdnsr/xianbao/main/publish/version.json` |
+| jsDelivr | `https://cdn.jsdelivr.net/gh/cdnsr/xianbao@main/publish/version.json` |
+| fastly / gcore | 同上 host 前缀 |
+
+结构示例：
+
+```json
+{
+  "version": "1.4.10",
+  "desc": "更新说明",
+  "history": [{ "version": "1.4.9", "desc": "…" }]
+}
+```
+
+发版时 CI 会与 `pubspec.yaml` 一并回写 `publish/version.json`。
+
+APK 下载：
+
+```
+https://github.com/cdnsr/xianbao/releases/download/v{version}/xianbao-v{version}-{armv8|armv7|x86_64}-release.apk
+```
+
+App 行为：
+
+- 启动约 2 秒后静默检查；有新版本且未忽略则弹窗
+- 登录页 / 用户中心 AppBar「检查更新」可手动检查
+- 支持忽略此版本、历史更新说明、应用内下载并调起安装
