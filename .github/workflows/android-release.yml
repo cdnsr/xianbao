@@ -143,46 +143,7 @@ jobs:
           mkdir -p publish
           export VERSION_NAME="$new_name"
           export VERSION_DESC="$desc"
-          python3 - <<'PY'
-import json, os
-from pathlib import Path
-
-path = Path("publish/version.json")
-old = {}
-if path.exists():
-    try:
-        old = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        old = {}
-
-history = []
-if isinstance(old.get("history"), list):
-    history = list(old["history"])
-
-prev_ver = str(old.get("version") or "").strip()
-if prev_ver:
-    history.insert(0, {"version": prev_ver, "desc": str(old.get("desc") or "")})
-
-seen = set()
-deduped = []
-for item in history:
-    if not isinstance(item, dict):
-        continue
-    ver = str(item.get("version") or "").strip()
-    if not ver or ver in seen:
-        continue
-    seen.add(ver)
-    deduped.append({"version": ver, "desc": str(item.get("desc") or "")})
-history = deduped[:20]
-
-data = {
-    "version": os.environ["VERSION_NAME"],
-    "desc": os.environ["VERSION_DESC"],
-    "history": history,
-}
-path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-print("Wrote", path, "->", data["version"])
-PY
+          python3 scripts/ci_update_version_json.py
 
           {
             echo "version_name=${new_name}"
