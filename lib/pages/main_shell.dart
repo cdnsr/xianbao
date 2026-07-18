@@ -8,6 +8,7 @@ import 'search/search_page.dart';
 import 'login/login_page.dart';
 import 'profile/profile_page.dart';
 import '../utils/cookie_bridge.dart';
+import '../widgets/update_dialog.dart';
 
 /// Main app shell with bottom navigation bar.
 class MainShell extends StatefulWidget {
@@ -19,6 +20,7 @@ class MainShell extends StatefulWidget {
 
 class _MainShellState extends State<MainShell> {
   final List<Widget> _pages = [const HomePage(), const SearchPage()];
+  bool _startupUpdateChecked = false;
 
   @override
   void initState() {
@@ -26,6 +28,17 @@ class _MainShellState extends State<MainShell> {
     // Check login state on startup
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initializeSession();
+      _scheduleStartupUpdateCheck();
+    });
+  }
+
+  void _scheduleStartupUpdateCheck() {
+    if (_startupUpdateChecked) return;
+    _startupUpdateChecked = true;
+    // Delay slightly so first frame / session init can settle.
+    Future<void>.delayed(const Duration(seconds: 2), () {
+      if (!mounted) return;
+      unawaited(UpdateCoordinator.checkOnStartup(context));
     });
   }
 

@@ -2,12 +2,12 @@
 #
 # On every push to main (except [skip ci]):
 # 1) Validate/decode Android keystore from GitHub Secrets
-# 2) Bump pubspec version (patch + internal build number) and commit back with [skip ci]
+# 2) Bump pubspec version + publish/version.json and commit with [skip ci]
 # 3) flutter build apk --release --split-per-abi
 # 4) Publish public GitHub Release with APKs
 #
 # User-facing version is versionName only: 1.4.9 / 1.4.10 (no +build).
-# pubspec still stores name+code (e.g. 1.4.9+24) for Android versionCode.
+# Client update check reads publish/version.json (multi-CDN mirrors).
 #
 # Required repository secrets:
 #   ANDROID_KEYSTORE_BASE64
@@ -100,7 +100,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Bump version in pubspec.yaml (scheme B)
+      - name: Bump version and publish/version.json
         id: version
         shell: bash
         run: |
@@ -114,7 +114,6 @@ jobs:
             exit 1
           fi
           if [[ ! "$code" =~ ^[0-9]+$ ]]; then
-            # Allow "1.4.9" without +code; start build from 1
             if [[ "$raw" == "$name" ]]; then
               code=0
             else
@@ -127,7 +126,6 @@ jobs:
           patch=$((patch + 1))
           new_name="${major}.${minor}.${patch}"
 
-          # Internal Android versionCode only (not shown in release title/APK name).
           run_no="${{ github.run_number }}"
           new_code=$((code + 1))
           if (( run_no > new_code )); then
@@ -138,11 +136,58 @@ jobs:
           sed -i -E "s/^version: .*/version: ${new_full}/" pubspec.yaml
           echo "Bumped version: ${raw} -> ${new_full} (display: ${new_name})"
 
+          # Short release notes for clients (version.json desc).
+          short_sha="$(echo '${{ github.sha }}' | cut -c1-7)"
+          desc="$(printf '线报酷 %s\n自动构建自 main（%s）\n推荐下载 armv8 安装包。' "$new_name" "$short_sha")"
+
+          mkdir -p publish
+          export VERSION_NAME="$new_name"
+          export VERSION_DESC="$desc"
+          python3 - <<'PY'
+import json, os
+from pathlib import Path
+
+path = Path("publish/version.json")
+old = {}
+if path.exists():
+    try:
+        old = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        old = {}
+
+history = []
+if isinstance(old.get("history"), list):
+    history = list(old["history"])
+
+prev_ver = str(old.get("version") or "").strip()
+if prev_ver:
+    history.insert(0, {"version": prev_ver, "desc": str(old.get("desc") or "")})
+
+seen = set()
+deduped = []
+for item in history:
+    if not isinstance(item, dict):
+        continue
+    ver = str(item.get("version") or "").strip()
+    if not ver or ver in seen:
+        continue
+    seen.add(ver)
+    deduped.append({"version": ver, "desc": str(item.get("desc") or "")})
+history = deduped[:20]
+
+data = {
+    "version": os.environ["VERSION_NAME"],
+    "desc": os.environ["VERSION_DESC"],
+    "history": history,
+}
+path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+print("Wrote", path, "->", data["version"])
+PY
+
           {
             echo "version_name=${new_name}"
             echo "version_code=${new_code}"
             echo "version_full=${new_full}"
-            # Public tag / release / APK names use versionName only (e.g. v1.4.9).
             echo "tag=v${new_name}"
           } >> "$GITHUB_OUTPUT"
 
@@ -150,7 +195,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git add pubspec.yaml
+          git add pubspec.yaml publish/version.json
           if git diff --cached --quiet; then
             echo "No version change to commit"
             exit 0
@@ -207,6 +252,9 @@ jobs:
 
             ### 版本
             - 版本号: `${{ steps.version.outputs.version_name }}`
+
+            ### 客户端检测更新
+            - `publish/version.json`（raw / jsDelivr 镜像）
           files: |
             dist/*.apk
         env:

@@ -46,3 +46,5 @@ flutter build apk --release --split-per-abi
 
 配置说明见 [docs/CI_RELEASE.md](docs/CI_RELEASE.md)。
 
+应用内支持检测更新（publish/version.json + GitHub Release APK）。
+

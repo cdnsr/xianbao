@@ -1,0 +1,5 @@
+{
+  "version": "1.4.9",
+  "desc": "线报酷 1.4.9\n- 登录页保持登录默认勾选\n- 隐藏返回首页\n- GitHub Actions 自动签名发版",
+  "history": []
+}

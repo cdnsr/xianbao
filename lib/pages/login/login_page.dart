@@ -5,6 +5,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 import '../../services/app_state.dart';
 import '../../utils/cookie_bridge.dart';
 import '../../utils/webview_dark_theme.dart';
+import '../../widgets/update_dialog.dart';
 
 /// Login page using WebView, as login requires captcha and JS.
 /// After successful login, syncs cookies back to Dio.
@@ -363,6 +364,13 @@ class _LoginPageState extends State<LoginPage> {
         title: const Text('登录'),
         centerTitle: true,
         automaticallyImplyLeading: false,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.system_update_alt),
+            tooltip: '检查更新',
+            onPressed: () => UpdateCoordinator.checkManual(context),
+          ),
+        ],
       ),
       body: !_loaded
           ? const Center(child: CircularProgressIndicator())
