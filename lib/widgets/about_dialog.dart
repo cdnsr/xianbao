@@ -77,7 +77,7 @@ class AboutAppDialog extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(
-              '作者：cndsr',
+              '作者：cdnsr',
               textAlign: TextAlign.center,
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.outline,
