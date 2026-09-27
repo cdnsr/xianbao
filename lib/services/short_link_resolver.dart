@@ -2,7 +2,6 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import 'http_client.dart';
-import 'union_link_service.dart';
 
 /// Expands JD short / affiliate (返利) links into the real product page.
 ///
@@ -15,21 +14,6 @@ import 'union_link_service.dart';
 ///
 /// Everything is best effort: when a link cannot be resolved the caller keeps
 /// the original URL, which is never worse than not trying.
-///
-/// Coverage is limited by what JD actually serves, so expect gaps:
-///
-///  * Single-product links resolve to `https://item.jd.com/<sku>.html`. That
-///    is roughly a third of `u.jd.com` links picked at random.
-///  * Coupon / campaign links do NOT resolve, and there is no plain product
-///    URL to recover: `u.jd.com` hops to `jingfen.jd.com/item?q=...` (领券页)
-///    or `pro.m.jd.com/mall/active/.../index.html?sku=...&q=...` (活动页),
-///    where the target sits inside the encrypted `q`. Those pages are SPA
-///    shells that fetch everything over JS, the `q` is not a simple
-///    obfuscation (single-byte and repeating-key XOR both fail to yield a
-///    URL), and nothing in the response mentions a product. Getting further
-///    would need to execute JD's JavaScript in a WebView. Posts that share
-///    coupons (新赚吧 / 好单 领券帖) are almost entirely this kind, so
-///    coverage on them is near zero rather than a third.
 ///
 /// Taobao's `m.tb.cn` is deliberately NOT handled - it is not a matter of the
 /// parsing below being incomplete. Measured over 15 live links:
@@ -59,10 +43,6 @@ class ShortLinkResolver {
 
   /// Resolved values, including nulls, so a failing link is only tried once.
   final Map<String, String?> _cache = <String, String?>{};
-
-  /// Drops memoised results. Call after the 京东联盟 service settings change,
-  /// otherwise links already expanded this session keep their old form.
-  void clearCache() => _cache.clear();
 
   /// Whether [url] is a link this resolver can expand.
   ///
@@ -102,9 +82,6 @@ class ShortLinkResolver {
   }
 
   /// Resolves [url] to the real page, or null when it cannot be resolved.
-  ///
-  /// When a 京东联盟 service is configured the product URL is additionally
-  /// routed through it, so the link carries the user's own union account.
   Future<String?> expand(String url) async {
     final key = url.trim();
     if (key.isEmpty) return null;
@@ -112,33 +89,26 @@ class ShortLinkResolver {
     final cached = _cache[key];
     if (cached != null || _cache.containsKey(key)) return cached;
 
-    // Do not cache failures: a link may resolve once the network is back.
-    final product = await _resolveToProductUrl(key);
-    if (product == null) return null;
-
-    final expanded = await _withOwnUnionLink(product);
-    _cache[key] = expanded;
-    return expanded;
-  }
-
-  /// The plain product page for [url], or null when it cannot be resolved.
-  Future<String?> _resolveToProductUrl(String url) async {
     // Already a product link - no network needed.
-    final direct = canonicalProductUrl(url);
-    if (direct != null) return direct;
-    if (!_shortHosts.contains(_hostOf(url))) return null;
-    try {
-      return await _follow(url);
-    } catch (_) {
+    final direct = canonicalProductUrl(key);
+    if (direct != null) {
+      _cache[key] = direct;
+      return direct;
+    }
+    if (!_shortHosts.contains(_hostOf(key))) {
+      _cache[key] = null;
       return null;
     }
-  }
 
-  /// Routes [productUrl] through the user's own 京东联盟 service when one is
-  /// set up, falling back to the clean product URL on any failure.
-  static Future<String> _withOwnUnionLink(String productUrl) async {
-    final own = await UnionLinkService.instance.promotionUrlFor(productUrl);
-    return own ?? productUrl;
+    String? resolved;
+    try {
+      resolved = await _follow(key);
+    } catch (_) {
+      resolved = null;
+    }
+    // Do not cache failures: a link may resolve next time the network is up.
+    if (resolved != null) _cache[key] = resolved;
+    return resolved;
   }
 
   /// Rewrites every expandable link in [html] to its real destination,
