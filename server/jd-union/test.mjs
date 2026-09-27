@@ -1,13 +1,15 @@
-import worker, { md5 } from './index.js';
+import worker, { md5, signatureBase } from './index.js';
 
 const METHOD_EXPECT = 'jd.union.open.promotion.bysubunionid.get';
 const ENV = { JD_APP_KEY: 'ak_test', JD_APP_SECRET: 'secret_test', JD_SITE_ID: 'site_123', APP_TOKEN: 'tok' };
 let captured = null;
 let reply = null;
+let replyQueue = [];
 
 globalThis.fetch = async (url, init) => {
   captured = { url, rawBody: init.body, body: Object.fromEntries(new URLSearchParams(init.body)) };
-  return { status: 200, text: async () => reply };
+  const body = replyQueue.length ? replyQueue.shift() : reply;
+  return { status: 200, text: async () => body };
 };
 
 let fail = 0;
@@ -96,6 +98,32 @@ const loud = await call('token=tok&url=https://item.jd.com/1.html&debug=1');
 check('debug exposes signed params', !!(loud.body.signedParams && loud.body.signedParams.method === METHOD_EXPECT));
 check('debug exposes the signature base', (loud.body.signatureBase || '').includes('app_keyak_test'), loud.body.signatureBase);
 check('debug exposes the sign', typeof loud.body.sign === 'string' && loud.body.sign.length === 32);
+
+// --- signatureBase must never include "sign" itself ---
+// It used to, because the debug output computed it after attaching sign,
+// which made the diagnostic useless for comparing against JD's own tool.
+check('signatureBase excludes sign', signatureBase({ method: 'm', app_key: 'k', sign: 'DEADBEEF' }) === 'app_keykmethodm',
+  signatureBase({ method: 'm', app_key: 'k', sign: 'DEADBEEF' }));
+
+const dbg = await call('token=tok&url=https://item.jd.com/1.html&debug=1');
+check('debug base has no sign value in it', !(dbg.body.signatureBase || '').includes(dbg.body.sign), dbg.body.signatureBase);
+
+// --- probe mode: tells credential problems apart from algorithm problems ---
+const okReply = JSON.stringify({ jd_union_open_promotion_bysubunionid_get_responce: { code: '0', result: JSON.stringify({ code: 200, data: { clickURL: 'https://u.jd.com/ok' } }) } });
+const badSignReply = JSON.stringify({ error_response: { code: '12', zh_desc: '无效签名' } });
+
+replyQueue = [badSignReply, okReply];
+let pr = await call('token=tok&url=https://item.jd.com/1.html&probe=1');
+check('probe tries both candidates', pr.body.probe.length === 2, JSON.stringify(pr.body.probe));
+check('probe reports the failing one', pr.body.probe[0].accepted === false && pr.body.probe[0].jdCode === '12');
+check('probe reports the passing one', pr.body.probe[1].accepted === true && pr.body.probe[1].url === 'https://u.jd.com/ok');
+check('probe points at credentials when one passes', pr.body.hint.includes('凭据'), pr.body.hint);
+check('probe never echoes a secret', !JSON.stringify(pr.body).includes('secret_test'), JSON.stringify(pr.body).slice(0, 120));
+
+replyQueue = [badSignReply, badSignReply];
+pr = await call('token=tok&url=https://item.jd.com/1.html&probe=1');
+check('probe points at the algorithm when none pass', pr.body.hint.includes('算法'), pr.body.hint);
+replyQueue = [];
 
 console.log(fail === 0 ? '\nALL PASS' : `\n${fail} FAILURE(S)`);
 process.exit(fail ? 1 : 0);

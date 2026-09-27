@@ -116,9 +116,12 @@ function timestamp() {
   );
 }
 
-/** The string JD signs: `key+value` pairs sorted by key, no separators. */
+/** The string JD signs: `key+value` pairs sorted by key, no separators.
+ *  `sign` is always excluded, so this stays correct even when called after
+ *  the signature has been attached. */
 function signatureBase(params) {
   return Object.keys(params)
+    .filter((k) => k !== 'sign')
     .sort()
     .map((k) => k + params[k])
     .join('');
@@ -170,8 +173,8 @@ function config(env) {
   };
 }
 
-async function convert(materialId, env) {
-  const cfg = config(env);
+/** Builds the signed parameter set for one JD call. */
+function buildParams(materialId, cfg, secret) {
   const params = {
     method: METHOD,
     app_key: cfg.appKey,
@@ -189,20 +192,31 @@ async function convert(materialId, env) {
       },
     }),
   };
-  params.sign = sign(params, cfg.appSecret);
+  params.sign = sign(params, secret);
+  return params;
+}
 
-  // Encode by hand rather than with URLSearchParams: the timestamp contains a
-  // space and URLSearchParams turns it into "+", which only decodes back to a
-  // space under form rules. "%20" is unambiguous, so whatever JD decodes
-  // matches the value we signed.
-  const body = Object.entries(params)
+/** Percent-encodes by hand rather than via URLSearchParams: the timestamp
+ *  contains a space and URLSearchParams writes it as "+", which only decodes
+ *  back to a space under form rules. "%20" is unambiguous, so whatever JD
+ *  decodes matches the value we signed. */
+function encodeBody(params) {
+  return Object.entries(params)
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
     .join('&');
+}
 
+/** JD reports failures as `{"error_response":{"code":"12",...}}`. */
+function jdErrorCode(parsed) {
+  const err = parsed && parsed.error_response;
+  return err && err.code != null ? String(err.code) : null;
+}
+
+async function callJd(params) {
   const res = await fetch(GATEWAY, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body,
+    body: encodeBody(params),
   });
   const raw = await res.text();
 
@@ -212,19 +226,64 @@ async function convert(materialId, env) {
   } catch {
     /* 京东偶尔直接返回 HTML 错误页 */
   }
+  return { status: res.status, raw, parsed, url: findClickUrl(parsed) };
+}
 
-  const url = findClickUrl(parsed);
+async function convert(materialId, env) {
+  const cfg = config(env);
+  const params = buildParams(materialId, cfg, cfg.appSecret);
+  const { status, raw, parsed, url } = await callJd(params);
   if (url) return { url };
+
   return {
     error: '京东未返回推广链接',
-    status: res.status,
+    status,
+    jdCode: jdErrorCode(parsed),
     raw: raw.slice(0, 800),
-    // 排查用：JD 返回「无效签名」时，把 params 填进京东开放平台的 API 测试工具，
-    // 对比它生成的 sign 与这里的 sign。algorithmMismatch 说明算法/字段不对，
-    // 一致则说明 appSecret 或 appKey 不对（含多余空白、取错应用等）。
+    // ?debug=1 才返回，见 fetch 里对这几个字段的处理。
     signedParams: params,
     signatureBase: signatureBase(params),
     sign: params.sign,
+  };
+}
+
+/**
+ * 用同一份参数分别以「配置的 secret」和「appKey 当 secret」各调一次京东，
+ * 用来区分两种失败：全都无效签名 = 算法或参与签名的字段不对；某个通过 =
+ * 凭据问题（secret 取错、两值互换、多了空白等）。
+ * 只回报哪一档通过了，不回显任何密钥内容。
+ */
+async function probeSecrets(materialId, env) {
+  const cfg = config(env);
+  const candidates = [
+    { label: 'JD_APP_SECRET', secret: cfg.appSecret },
+    { label: 'JD_APP_KEY（若把 key 误当 secret）', secret: cfg.appKey },
+  ];
+
+  const results = [];
+  for (const candidate of candidates) {
+    if (!candidate.secret) continue;
+    const entry = {
+      tried: candidate.label,
+      length: candidate.secret.length,
+    };
+    try {
+      const params = buildParams(materialId, cfg, candidate.secret);
+      const r = await callJd(params);
+      entry.jdCode = jdErrorCode(r.parsed);
+      entry.accepted = Boolean(r.url);
+      if (r.url) entry.url = r.url;
+    } catch (e) {
+      entry.error = String((e && e.message) || e);
+    }
+    results.push(entry);
+  }
+
+  return {
+    probe: results,
+    hint: results.some((r) => r.accepted)
+      ? '有候选通过：是凭据问题，请按通过的那一档重设 secret。'
+      : '全部候选都无效签名：更可能是签名算法或参与签名的字段，而不是凭据。',
   };
 }
 
@@ -252,6 +311,10 @@ export default {
     }
 
     try {
+      if (reqUrl.searchParams.get('probe') === '1') {
+        return json(await probeSecrets(materialId, env), 200);
+      }
+
       const result = await convert(materialId, env);
       if (reqUrl.searchParams.get('debug') === '1') {
         result.method = METHOD;
