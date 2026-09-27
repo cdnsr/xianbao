@@ -138,10 +138,27 @@ jobs:
           fi
 
           echo "Releasing ${version} (+${version_code}) from tag ${REF_NAME} (previous: ${published:-none})"
+
+          # The Release page summary comes from the annotated tag message, so
+          # the person tagging writes it once and it lands there verbatim:
+          #   git tag -a v1.5.1 -m "更新摘要..."
+          git fetch origin "refs/tags/${REF_NAME}:refs/tags/${REF_NAME}" --force --quiet || true
+          if [ "$(git cat-file -t "refs/tags/${REF_NAME}" 2>/dev/null || true)" = "tag" ]; then
+            notes="$(git tag -l --format='%(contents)' "$REF_NAME")"
+          else
+            notes="> 本次构建未提供更新摘要。使用附注 tag 即可带上：\`git tag -a ${REF_NAME} -m \"更新说明\"\`"
+          fi
+          if [ -z "${notes//[[:space:]]/}" ]; then
+            notes="> 本次构建未提供更新摘要。"
+          fi
+
           {
             echo "version_name=${version}"
             echo "version_code=${version_code}"
             echo "version_full=${version}+${version_code}"
+            echo "notes<<XIANBAO_NOTES_EOF"
+            printf '%s\n' "$notes"
+            echo "XIANBAO_NOTES_EOF"
           } >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
@@ -176,7 +193,8 @@ jobs:
           body: |
             ## 线报酷 ${{ steps.version.outputs.version_name }}
 
-            由 tag `${{ github.ref_name }}`（`${{ github.sha }}`）触发的自动构建。
+            ### 本次更新
+            ${{ steps.version.outputs.notes }}
 
             ### 安装包（推荐真机 armv8）
             - `xianbao-v${{ steps.version.outputs.version_name }}-armv8-release.apk`
@@ -185,6 +203,7 @@ jobs:
 
             ### 版本
             - 版本号: `${{ steps.version.outputs.version_name }}`
+            - 构建自 tag `${{ github.ref_name }}`（`${{ github.sha }}`）
 
             ### 客户端检测更新
             - `publish/version.json`（raw / jsDelivr 镜像）
