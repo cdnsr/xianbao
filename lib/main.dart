@@ -1,5 +1,6 @@
 import 'dart:ui' show PlatformDispatcher;
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
 import 'services/app_state.dart';
 import 'services/home_cache_service.dart';
@@ -82,6 +83,17 @@ class XianbaoApp extends StatelessWidget {
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
       themeMode: themeMode,
+      // Without these, MaterialApp falls back to English-only
+      // DefaultMaterialLocalizations and the long-press text selection toolbar
+      // (复制 / 全选 / 粘贴 …) renders in English. The app's own strings are all
+      // Chinese, so zh_CN is the only supported locale - devices set to any
+      // other language fall back to it rather than to English.
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: const [Locale('zh', 'CN')],
       home: const MainShell(),
     );
   }
