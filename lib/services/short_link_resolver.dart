@@ -14,6 +14,17 @@ import 'http_client.dart';
 ///
 /// Everything is best effort: when a link cannot be resolved the caller keeps
 /// the original URL, which is never worse than not trying.
+///
+/// Taobao's `m.tb.cn` is deliberately NOT handled - it is not a matter of the
+/// parsing below being incomplete. Measured over 15 live links:
+///
+///  * it never redirects; every user agent (desktop, iPhone, Android) gets a
+///    200 with the real hop buried in `location.replace(url)`;
+///  * that hop is always a 淘宝客 page (`s.click.taobao.com/t` or
+///    `uland.taobao.com/coupon/edetail`) whose product id exists only inside
+///    the encrypted `e` parameter - no plain product URL is served anywhere;
+///  * those pages render the product client-side, so nothing is recoverable
+///    over plain HTTP. Expanding them would need a WebView.
 class ShortLinkResolver {
   ShortLinkResolver._();
 
