@@ -184,15 +184,8 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _fetchNewArticles() async {
     if (_isLoading) return;
-    if (_selectedCategory != null && _selectedCategory!.slug == 'xianbaoku') {
-      return;
-    }
     try {
-      // Use the category-specific push endpoint for category pages,
-      // matching the website's worker.js behavior (push_{cateId}.json).
-      final newArticles = _selectedCategory != null && _currentCateId != null
-          ? await _api.fetchCategoryNewArticles(_currentCateId!)
-          : await _api.fetchNewArticles();
+      final newArticles = await _fetchCandidateArticles();
       if (!mounted || newArticles.isEmpty) return;
 
       final fresh = newArticles
@@ -217,6 +210,36 @@ class _HomePageState extends State<HomePage> {
         }
       });
     } catch (_) {}
+  }
+
+  /// Picks the refresh source for the current view.
+  ///
+  /// The website polls `push_{cateId}.json` every 5s, so that is tried first.
+  /// Some categories have no usable feed there - the server answers with an
+  /// HTML error page instead of JSON, or with an empty list - so those fall
+  /// back to re-reading page 1 of the category itself. That keeps every
+  /// category in the drawer refreshing, not just the ones with a live feed.
+  Future<List<ArticleListItem>> _fetchCandidateArticles() async {
+    final category = _selectedCategory;
+    if (category == null) return _api.fetchNewArticles();
+
+    // The category id is only known once its page has loaded. Before that
+    // there is nothing to poll, and falling back to the site-wide feed would
+    // push other categories' articles into this list.
+    final cateId = _currentCateId;
+    if (cateId == null) return const <ArticleListItem>[];
+
+    try {
+      final pushed = await _api.fetchCategoryNewArticles(cateId);
+      if (pushed.isNotEmpty) return pushed;
+    } catch (_) {
+      // No usable feed for this category; fall through to page 1 below.
+    }
+    final page = await _api.fetchCategoryArticleList(
+      slug: category.slug,
+      page: 1,
+    );
+    return page.items;
   }
 
   void _onScroll() {
