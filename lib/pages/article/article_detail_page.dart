@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../../models/article.dart';
 import '../../services/api_service.dart';
+import '../../services/short_link_resolver.dart';
 import '../../services/app_state.dart';
 import '../../utils/error_message.dart';
 import '../../utils/html_utils.dart';
@@ -26,6 +27,13 @@ class _ArticleDetailPageState extends State<ArticleDetailPage> {
   bool _isLoading = true;
   String? _error;
 
+  /// Content with JD short links expanded, once that has finished. Until then
+  /// the original content is shown, so the article never waits on JD.
+  String? _expandedContentHtml;
+
+  String get _contentHtml =>
+      _expandedContentHtml ?? _detail?.contentHtml ?? '';
+
   bool _isCollected = false;
   int _collectSize = 0;
   bool _collectBusy = false;
@@ -44,6 +52,7 @@ class _ArticleDetailPageState extends State<ArticleDetailPage> {
     setState(() {
       _isLoading = true;
       _error = null;
+      _expandedContentHtml = null;
     });
     try {
       final detail = await _api.fetchArticleDetail(widget.article.path);
@@ -52,6 +61,7 @@ class _ArticleDetailPageState extends State<ArticleDetailPage> {
         _detail = detail;
         _isLoading = false;
       });
+      unawaited(_expandShortLinks(detail));
       final id = detail.articleId ?? widget.article.articleId;
       if (id != null) {
         unawaited(_refreshCollectState(id));
@@ -62,6 +72,25 @@ class _ArticleDetailPageState extends State<ArticleDetailPage> {
         _isLoading = false;
         _error = friendlyErrorMessage(e);
       });
+    }
+  }
+
+  /// Replaces 返利 short links with the real product pages.
+  ///
+  /// Deliberately not awaited by the caller: the article renders straight
+  /// away and links swap in when JD answers. Blocking on that would stall
+  /// every article behind a third-party request that can also time out.
+  Future<void> _expandShortLinks(ArticleDetail detail) async {
+    if (!ShortLinkResolver.hasExpandableLink(detail.contentHtml)) return;
+    try {
+      final expanded = await ShortLinkResolver.instance
+          .rewriteHtml(detail.contentHtml)
+          .timeout(const Duration(seconds: 10));
+      if (!mounted || expanded == detail.contentHtml) return;
+      if (_detail?.contentHtml != detail.contentHtml) return;
+      setState(() => _expandedContentHtml = expanded);
+    } catch (_) {
+      // Best effort: keep the original content.
     }
   }
 
@@ -131,9 +160,8 @@ class _ArticleDetailPageState extends State<ArticleDetailPage> {
   }
 
   Future<void> _onCopy() async {
-    final detail = _detail;
-    if (detail == null) return;
-    final text = HtmlUtils.toPlainText(detail.contentHtml);
+    if (_detail == null) return;
+    final text = HtmlUtils.toPlainText(_contentHtml);
     if (text.isEmpty) {
       _snack('正文为空，无法复制');
       return;
@@ -240,7 +268,7 @@ class _ArticleDetailPageState extends State<ArticleDetailPage> {
           const Divider(height: 24),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: ArticleContentView(contentHtml: detail.contentHtml),
+            child: ArticleContentView(contentHtml: _contentHtml),
           ),
           const SizedBox(height: 16),
           const Divider(height: 1),
