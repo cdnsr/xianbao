@@ -1,7 +1,11 @@
 {
-  "version": "1.4.16",
-  "desc": "线报酷 1.4.16\n自动构建自 main（0b9bb06）\n推荐下载 armv8 安装包。",
+  "version": "1.5.0",
+  "desc": "线报酷 1.5.0\n由 tag v1.5.0 自动构建（a9e0f08）\n推荐下载 armv8 安装包。",
   "history": [
+    {
+      "version": "1.4.16",
+      "desc": "线报酷 1.4.16\n自动构建自 main（0b9bb06）\n推荐下载 armv8 安装包。"
+    },
     {
       "version": "1.4.15",
       "desc": "线报酷 1.4.15\n自动构建自 main（307a109）\n推荐下载 armv8 安装包。"
