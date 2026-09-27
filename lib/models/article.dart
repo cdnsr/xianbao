@@ -99,6 +99,39 @@ class ArticleListItem {
     );
   }
 
+  /// Builds a list item from one push.json entry.
+  ///
+  /// Push entries carry `cateid` instead of the list markup, so the category
+  /// icon is derived the same way the website does: `cg` + cateid.
+  factory ArticleListItem.fromPushMap(
+    Map<String, dynamic> json, {
+    int? fallbackCateId,
+  }) {
+    final cateId = _asInt(json['cateid']) ?? fallbackCateId;
+    return ArticleListItem(
+      url: json['url'] as String? ?? '',
+      title: json['title'] as String? ?? '',
+      category: json['catename'] as String? ?? '',
+      summary: json['content'] as String? ?? '',
+      commentCount: _asInt(json['comments']) ?? 0,
+      date: json['datetime'] as String? ?? '',
+      time: '${json['datetime'] ?? ''} ${json['shorttime'] ?? ''}',
+      author: json['louzhu'] as String? ?? '',
+      authorRegistrationTime: json['louzhuregtime'],
+      figureClass: cateId == null ? '' : 'cg$cateId',
+    );
+  }
+
+  /// push.json is inconsistent about number types - `cateid` arrives as a
+  /// string ("30") while `comments` arrives as a number - so accept either.
+  /// Casting with `as num?` on a string throws, which used to take the whole
+  /// push refresh down with it.
+  static int? _asInt(Object? value) {
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value.trim());
+    return null;
+  }
+
   /// Parse all article list items from an SSR list HTML page.
   static List<ArticleListItem> parseList(String html) {
     final document = _parse(html);
@@ -389,7 +422,7 @@ class CollectToggleResult {
   });
 
   factory CollectToggleResult.fromJson(Map<String, dynamic> json) {
-    final code = (json['code'] as num?)?.toInt() ?? -1;
+    final code = ArticleListItem._asInt(json['code']) ?? -1;
     final size = (json['size'] as num?)?.toInt() ?? 0;
     final msg = json['msg']?.toString() ?? '';
     return CollectToggleResult(

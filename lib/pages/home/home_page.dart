@@ -255,7 +255,11 @@ class _HomePageState extends State<HomePage> {
           _displayCount = _articles.length;
         }
       });
-    } catch (_) {}
+    } catch (e) {
+      // Keep the list usable, but never hide the failure: a swallowed error
+      // here silently disables the 5s auto-refresh with no other symptom.
+      debugPrint('Home auto refresh failed: $e');
+    }
   }
 
   /// Picks the refresh source for the current view.

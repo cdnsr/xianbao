@@ -144,11 +144,9 @@ class ApiService {
     final json = await _client.fetchPushFeed(path);
     final list = jsonDecode(json) as List;
     return list
+        .whereType<Map<String, dynamic>>()
         .map(
-          (e) => _fromPushMap(
-            e as Map<String, dynamic>,
-            fallbackCateId: fallbackCateId,
-          ),
+          (m) => ArticleListItem.fromPushMap(m, fallbackCateId: fallbackCateId),
         )
         .toList();
   }
@@ -170,29 +168,6 @@ class ApiService {
     final match = RegExp(r'postjson\.url\s*=\s*"([^"]*)"').firstMatch(script);
     final url = match?.group(1)?.trim() ?? '';
     return url.isEmpty ? null : url;
-  }
-
-  /// Builds a list item from one push.json entry.
-  ///
-  /// Push entries carry `cateid` instead of the list markup, so the category
-  /// icon is derived the same way the website does: `cg` + cateid.
-  static ArticleListItem _fromPushMap(
-    Map<String, dynamic> m, {
-    int? fallbackCateId,
-  }) {
-    final cateId = (m['cateid'] as num?)?.toInt() ?? fallbackCateId;
-    return ArticleListItem(
-      url: m['url'] as String? ?? '',
-      title: m['title'] as String? ?? '',
-      category: m['catename'] as String? ?? '',
-      summary: m['content'] as String? ?? '',
-      commentCount: (m['comments'] as num?)?.toInt() ?? 0,
-      date: m['datetime'] as String? ?? '',
-      time: '${m['datetime'] ?? ''} ${m['shorttime'] ?? ''}',
-      author: m['louzhu'] as String? ?? '',
-      authorRegistrationTime: m['louzhuregtime'],
-      figureClass: cateId == null ? '' : 'cg$cateId',
-    );
   }
 
   /// Check whether the user is logged in.
