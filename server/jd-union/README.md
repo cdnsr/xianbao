@@ -72,6 +72,23 @@ node test.mjs
 删掉那几行重新 `npx wrangler deploy` 即可。**不管有没有这个提示，接口都能正常调用** ——
 用下面的 curl 直接验证。
 
+**京东返回 `{"error_response":{"code":"12","zh_desc":"无效签名"}}`**
+
+这是好消息：请求已经到京东并被受理了，只是签名对不上。按可能性排查：
+
+1. **appSecret 带了空白。** `wrangler secret put` 会把 stdin 的换行一起存进密钥 ——
+   一个尾部带 `\n` 的 secret 产生的正是「无效签名」。本服务已对配置做 trim，
+   重新 `npx wrangler deploy` 就能排除这一项。
+2. **凭据取错或填反了。** 重新 `wrangler secret put` 一遍，确认没有把 siteId 填成 appKey、
+   或用了别个应用的 appSecret。
+3. **算法或参与签名的字段不同。** 加 `&debug=1` 再调一次，返回里会多出
+   `signedParams` / `signatureBase` / `sign`。把 `signedParams` 填进京东开放平台的
+   API 测试工具，对比它生成的 `sign`：
+   - **不一致** → 签名算法或字段列表要改，改动点在 `index.js` 的 `signatureBase()`
+   - **一致** → 是凭据问题（第 1、2 条），不是算法问题
+
+   注意 `debug=1` 会带出 `app_key`，排查完就别再用它了。
+
 **怎么确认服务真的能用**
 
 ```bash

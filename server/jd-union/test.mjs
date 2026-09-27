@@ -1,11 +1,12 @@
 import worker, { md5 } from './index.js';
 
+const METHOD_EXPECT = 'jd.union.open.promotion.bysubunionid.get';
 const ENV = { JD_APP_KEY: 'ak_test', JD_APP_SECRET: 'secret_test', JD_SITE_ID: 'site_123', APP_TOKEN: 'tok' };
 let captured = null;
 let reply = null;
 
 globalThis.fetch = async (url, init) => {
-  captured = { url, body: Object.fromEntries(new URLSearchParams(init.body)) };
+  captured = { url, rawBody: init.body, body: Object.fromEntries(new URLSearchParams(init.body)) };
   return { status: 200, text: async () => reply };
 };
 
@@ -65,6 +66,36 @@ check('502 on HTML error page', r.status === 502, JSON.stringify(r.body).slice(0
 reply = JSON.stringify({ data: { clickUrl: 'https://u.jd.com/flat' } });
 r = await call('token=tok&url=https://item.jd.com/1.html');
 check('parses flat clickUrl too', r.body.url === 'https://u.jd.com/flat', JSON.stringify(r.body));
+
+// --- regression: secret pasted with surrounding whitespace ---
+// `wrangler secret put` keeps a trailing newline from stdin, and a secret
+// carrying one produces exactly the 无效签名 error JD returned.
+captured = null;
+await call('token=tok&url=https://item.jd.com/1.html', {
+  JD_APP_KEY: ' ak_test ', JD_APP_SECRET: '\nsecret_test\n', JD_SITE_ID: 'site_123 ', APP_TOKEN: 'tok',
+});
+const trimmed = captured.body;
+check('trims appKey', trimmed.app_key === 'ak_test', trimmed.app_key);
+check('trims siteId', JSON.parse(trimmed['360buy_param_json']).promotionCodeReq.siteId === 'site_123');
+check('signs the trimmed secret', trimmed.sign === md5('secret_test' + Object.keys(trimmed).filter(k => k !== 'sign').sort().map(k => k + trimmed[k]).join('') + 'secret_test').toUpperCase(), trimmed.sign);
+
+// --- regression: the timestamp space must not be sent as "+" ---
+// URLSearchParams encodes a space as "+", which only decodes back to a space
+// under form rules; "%20" is unambiguous, so JD decodes what we signed.
+check('timestamp space sent as %20', /timestamp=[^&]*%20[^&]*/.test(captured.rawBody), captured.rawBody.slice(0, 80));
+check('no bare + in the body', !captured.rawBody.includes('+'), captured.rawBody.slice(0, 80));
+
+// --- signing details are debug-only ---
+reply = JSON.stringify({ error_response: { code: '12', zh_desc: 'invalid sign' } });
+const quiet = await call('token=tok&url=https://item.jd.com/1.html');
+check('sign details hidden by default',
+  quiet.body.signedParams === undefined && quiet.body.sign === undefined && quiet.body.signatureBase === undefined,
+  Object.keys(quiet.body).join(','));
+
+const loud = await call('token=tok&url=https://item.jd.com/1.html&debug=1');
+check('debug exposes signed params', !!(loud.body.signedParams && loud.body.signedParams.method === METHOD_EXPECT));
+check('debug exposes the signature base', (loud.body.signatureBase || '').includes('app_keyak_test'), loud.body.signatureBase);
+check('debug exposes the sign', typeof loud.body.sign === 'string' && loud.body.sign.length === 32);
 
 console.log(fail === 0 ? '\nALL PASS' : `\n${fail} FAILURE(S)`);
 process.exit(fail ? 1 : 0);

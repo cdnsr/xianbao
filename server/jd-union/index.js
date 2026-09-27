@@ -116,12 +116,16 @@ function timestamp() {
   );
 }
 
-function sign(params, secret) {
-  const concat = Object.keys(params)
+/** The string JD signs: `key+value` pairs sorted by key, no separators. */
+function signatureBase(params) {
+  return Object.keys(params)
     .sort()
     .map((k) => k + params[k])
     .join('');
-  return md5(secret + concat + secret).toUpperCase();
+}
+
+function sign(params, secret) {
+  return md5(secret + signatureBase(params) + secret).toUpperCase();
 }
 
 // ---------------------------------------------------------------------------
@@ -153,10 +157,24 @@ function findClickUrl(value) {
   return null;
 }
 
+/** Reads config, trimming it - `wrangler secret put` keeps a trailing newline
+ *  from stdin, and a secret with a stray "\n" produces exactly the
+ *  "无效签名" error JD just returned. */
+function config(env) {
+  return {
+    appKey: (env.JD_APP_KEY || '').trim(),
+    appSecret: (env.JD_APP_SECRET || '').trim(),
+    siteId: (env.JD_SITE_ID || '').trim(),
+    positionId: (env.JD_POSITION_ID || '').trim(),
+    subUnionId: (env.JD_SUB_UNION_ID || '').trim(),
+  };
+}
+
 async function convert(materialId, env) {
+  const cfg = config(env);
   const params = {
     method: METHOD,
-    app_key: env.JD_APP_KEY,
+    app_key: cfg.appKey,
     timestamp: timestamp(),
     format: 'json',
     v: '1.0',
@@ -164,19 +182,27 @@ async function convert(materialId, env) {
     '360buy_param_json': JSON.stringify({
       promotionCodeReq: {
         materialId,
-        siteId: env.JD_SITE_ID,
-        ...(env.JD_POSITION_ID ? { positionId: Number(env.JD_POSITION_ID) } : {}),
-        ...(env.JD_SUB_UNION_ID ? { subUnionId: env.JD_SUB_UNION_ID } : {}),
+        siteId: cfg.siteId,
+        ...(cfg.positionId ? { positionId: Number(cfg.positionId) } : {}),
+        ...(cfg.subUnionId ? { subUnionId: cfg.subUnionId } : {}),
         chainType: 1,
       },
     }),
   };
-  params.sign = sign(params, env.JD_APP_SECRET);
+  params.sign = sign(params, cfg.appSecret);
+
+  // Encode by hand rather than with URLSearchParams: the timestamp contains a
+  // space and URLSearchParams turns it into "+", which only decodes back to a
+  // space under form rules. "%20" is unambiguous, so whatever JD decodes
+  // matches the value we signed.
+  const body = Object.entries(params)
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+    .join('&');
 
   const res = await fetch(GATEWAY, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams(params).toString(),
+    body,
   });
   const raw = await res.text();
 
@@ -189,10 +215,20 @@ async function convert(materialId, env) {
 
   const url = findClickUrl(parsed);
   if (url) return { url };
-  return { error: '京东未返回推广链接', status: res.status, raw: raw.slice(0, 800) };
+  return {
+    error: '京东未返回推广链接',
+    status: res.status,
+    raw: raw.slice(0, 800),
+    // 排查用：JD 返回「无效签名」时，把 params 填进京东开放平台的 API 测试工具，
+    // 对比它生成的 sign 与这里的 sign。algorithmMismatch 说明算法/字段不对，
+    // 一致则说明 appSecret 或 appKey 不对（含多余空白、取错应用等）。
+    signedParams: params,
+    signatureBase: signatureBase(params),
+    sign: params.sign,
+  };
 }
 
-export { md5, sign };
+export { md5, sign, signatureBase };
 
 export default {
   async fetch(request, env) {
@@ -206,8 +242,13 @@ export default {
     if (!materialId.startsWith('http')) {
       return json({ error: '缺少 url 参数（http 开头的商品地址）' }, 400);
     }
-    for (const key of ['JD_APP_KEY', 'JD_APP_SECRET', 'JD_SITE_ID']) {
-      if (!env[key]) return json({ error: `服务端未配置 ${key}` }, 500);
+    const cfg = config(env);
+    const missing = [];
+    if (!cfg.appKey) missing.push('JD_APP_KEY');
+    if (!cfg.appSecret) missing.push('JD_APP_SECRET');
+    if (!cfg.siteId) missing.push('JD_SITE_ID');
+    if (missing.length) {
+      return json({ error: `服务端未配置 ${missing.join('、')}` }, 500);
     }
 
     try {
@@ -216,6 +257,11 @@ export default {
         result.method = METHOD;
         result.gateway = GATEWAY;
         result.materialId = materialId;
+      } else {
+        // 签名相关的内容只在 debug 模式返回，避免默认把 app_key 暴露出去。
+        delete result.signedParams;
+        delete result.signatureBase;
+        delete result.sign;
       }
       return json(result, result.url ? 200 : 502);
     } catch (e) {
