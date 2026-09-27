@@ -61,6 +61,26 @@ node test.mjs
 
 覆盖 MD5（对拍 Node `crypto`，含多分组、长度边界、UTF-8）、签名拼接、鉴权、参数形状、以及几种京东响应结构的解析。**它不校验京东接口本身** —— 接口名和字段以京东文档为准，见下。
 
+## 常见问题
+
+**控制台弹「无访问权限：logpush is not enabled for this account」**
+
+这是 Cloudflare 控制台的日志页报的，不是 Worker 本身出错。原因是 `wrangler.toml` 里开了
+`[observability]`，控制台的 Worker 日志页会去查 Logpush —— 那是 Enterprise 功能，免费账号没有。
+
+本仓库的 `wrangler.toml` 已经把 `[observability]` 去掉了。如果你之前已经部署过带这项的版本，
+删掉那几行重新 `npx wrangler deploy` 即可。**不管有没有这个提示，接口都能正常调用** ——
+用下面的 curl 直接验证。
+
+**怎么确认服务真的能用**
+
+```bash
+curl -s "https://xxxx.workers.dev/?token=你的APP_TOKEN&url=https://item.jd.com/100288670988.html" \
+     -w '\nHTTP %{http_code}\n'
+```
+
+返回 `{"url":"https://u.jd.com/xxxx"}` 就是通的。返回 `{"error":...}` 才是真的有问题。
+
 ## 已知不确定点
 
 - **接口名 / 字段**：默认用 `jd.union.open.promotion.bysubunionid.get` + `promotionCodeReq`。京东改过几版，如果报签名错或参数错，用 `?debug=1` 看实际请求再对照文档调整 `METHOD` / 请求体。
