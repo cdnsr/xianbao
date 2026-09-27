@@ -28,8 +28,12 @@
 // 配置
 // ---------------------------------------------------------------------------
 
-/** 京东联盟开放平台网关。老网关是 https://api.jd.com/routerjson */
-const GATEWAY = 'https://router.jd.com/api';
+/** 文档（open.jd.com/v2/#/doc/guide?listId=1909）给出的正式网关。
+ *  错误码 12「无效签名」属于这个 1.0 网关，之前的地址是错的。 */
+const DOC_GATEWAY = 'https://api.jd.com/routerjson';
+
+/** 之前误用的地址，仅留给 probe 对照。 */
+const LEGACY_GATEWAY = 'https://router.jd.com/api';
 
 /** 转链接口。按京东联盟文档可能需要在 bysubunionid / common / byunionid 之间切换。 */
 const METHOD = 'jd.union.open.promotion.bysubunionid.get';
@@ -136,58 +140,46 @@ function sign(params, secret) {
   return md5(secret + signatureBase(params) + secret).toUpperCase();
 }
 
-async function hmacSha256Hex(secret, message) {
-  const enc = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    'raw',
-    enc.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  );
-  const mac = await crypto.subtle.sign('HMAC', key, enc.encode(message));
-  return [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, '0')).join('');
-}
+/**
+ * 文档确认的签名规则（api调用详解 五、签名算法 + 七、注意事项）：
+ *   1. 所有请求参数按参数名升序
+ *   2. 参数名与参数值直接相连，`key+value`，不加分隔符
+ *   3. appSecret 夹在拼接串两端
+ *   4. MD5 后转大写
+ *   并且明确写了「value 无需编码」—— 签名用原始值，只有拼进 URL 时才 encode。
+ * 下面这几项就是按这个来的，不再保留猜测性的变体。
+ */
 
 /**
- * 候选签名方案。
+ * 文档没有正面回答、但会影响签名结果的两个维度，做成候选让 probe 逐个试：
  *
- * 京东的签名规则在平台换代时变过（值是否先 URL 编码、拼接是否用 `k=v&`、
- * MD5 还是 HMAC-SHA256），而文档在登录墙后面、外部查不到。与其猜，不如让
- * `?probe=1` 拿同一份参数把每种方案都打一遍，由京东告诉我们哪种能过。
+ *  - 网关地址：文档写的是 api.jd.com/routerjson，而之前用的是 router.jd.com/api。
+ *    换网关意味着换一套验签实现，所以值得对照。
+ *  - sign_method：文档「系统参数」表里根本没有这个参数，签名示例里也没有；
+ *    很多 JD SDK 却会带上。若网关只对识别到的参数验签，多传一个就会导致对不上。
  *
- * 第一项是默认方案，跑起来就用它。
+ * 第一项是现在的默认值。
  */
-const SIGN_VARIANTS = [
+const REQUEST_PROFILES = [
   {
-    label: 'md5 / key+value / 原值 / 大写（默认）',
-    signMethod: 'md5',
-    base: (p) => signedPairs(p).map(([k, v]) => k + v).join(''),
-    hash: (secret, base) => md5(secret + base + secret).toUpperCase(),
+    label: '文档网关 + 不传 sign_method（文档参数表里没有它）',
+    gateway: DOC_GATEWAY,
+    signMethod: null,
   },
   {
-    label: 'md5 / key+value / 值先 URL 编码 / 大写',
+    label: '文档网关 + 传 sign_method=md5',
+    gateway: DOC_GATEWAY,
     signMethod: 'md5',
-    base: (p) => signedPairs(p).map(([k, v]) => k + encodeURIComponent(v)).join(''),
-    hash: (secret, base) => md5(secret + base + secret).toUpperCase(),
   },
   {
-    label: 'md5 / query 形式 k=v&k=v / 大写',
-    signMethod: 'md5',
-    base: (p) => signedPairs(p).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&'),
-    hash: (secret, base) => md5(secret + base + secret).toUpperCase(),
+    label: '旧地址 router.jd.com/api + 不传 sign_method',
+    gateway: LEGACY_GATEWAY,
+    signMethod: null,
   },
   {
-    label: 'md5 / key+value / 原值 / 小写',
+    label: '旧地址 router.jd.com/api + 传 sign_method=md5',
+    gateway: LEGACY_GATEWAY,
     signMethod: 'md5',
-    base: (p) => signedPairs(p).map(([k, v]) => k + v).join(''),
-    hash: (secret, base) => md5(secret + base + secret),
-  },
-  {
-    label: 'hmac-sha256 / key+value / 原值',
-    signMethod: 'hmac-sha256',
-    base: (p) => signedPairs(p).map(([k, v]) => k + v).join(''),
-    hash: (secret, base) => hmacSha256Hex(secret, base),
   },
 ];
 
@@ -233,15 +225,15 @@ function config(env) {
   };
 }
 
-/** Builds the signed parameter set for one JD call under [variant]. */
-async function buildParams(materialId, cfg, secret, variant = SIGN_VARIANTS[0]) {
+/** Builds the signed parameter set for one JD call under [profile]. */
+function buildParams(materialId, cfg, secret, profile = REQUEST_PROFILES[0]) {
   const params = {
     method: METHOD,
     app_key: cfg.appKey,
     timestamp: timestamp(),
     format: 'json',
     v: '1.0',
-    sign_method: variant.signMethod,
+    ...(profile.signMethod ? { sign_method: profile.signMethod } : {}),
     '360buy_param_json': JSON.stringify({
       promotionCodeReq: {
         materialId,
@@ -252,7 +244,7 @@ async function buildParams(materialId, cfg, secret, variant = SIGN_VARIANTS[0]) 
       },
     }),
   };
-  params.sign = await variant.hash(secret, variant.base(params));
+  params.sign = sign(params, secret);
   return params;
 }
 
@@ -272,8 +264,8 @@ function jdErrorCode(parsed) {
   return err && err.code != null ? String(err.code) : null;
 }
 
-async function callJd(params) {
-  const res = await fetch(GATEWAY, {
+async function callJd(params, gateway = DOC_GATEWAY) {
+  const res = await fetch(gateway, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: encodeBody(params),
@@ -291,8 +283,9 @@ async function callJd(params) {
 
 async function convert(materialId, env) {
   const cfg = config(env);
-  const params = await buildParams(materialId, cfg, cfg.appSecret);
-  const { status, raw, parsed, url } = await callJd(params);
+  const profile = REQUEST_PROFILES[0];
+  const params = buildParams(materialId, cfg, cfg.appSecret, profile);
+  const { status, raw, parsed, url } = await callJd(params, profile.gateway);
   if (url) return { url };
 
   return {
@@ -301,6 +294,7 @@ async function convert(materialId, env) {
     jdCode: jdErrorCode(parsed),
     raw: raw.slice(0, 800),
     // ?debug=1 才返回，见 fetch 里对这几个字段的处理。
+    gateway: profile.gateway,
     signedParams: params,
     signatureBase: signatureBase(params),
     sign: params.sign,
@@ -308,11 +302,12 @@ async function convert(materialId, env) {
 }
 
 /**
- * 拿同一份参数，把每个候选 secret × 每种签名方案都打一遍京东，看哪种能过。
+ * 逐个候选「请求档案 × secret」打一遍京东，让京东自己说哪种能过。
  *
- * 这是为「没有文档、无法本地复现」准备的：京东自己会告诉我们哪套规则对。
- * 只回报「哪一档通过」和长度，不回显任何密钥内容。
- * 最坏情况会消耗 secret 数 × 方案数 次联盟接口调用，成功即提前结束。
+ * 文档已经确认了签名规则（MD5、key+value 升序、值不编码、secret 夹两端），
+ * 剩下的不确定性只有两个：网关地址，以及文档参数表里没有的 sign_method。
+ * 只回报哪一档通过和长度，不回显任何密钥内容。
+ * 最坏消耗 档案数 × secret 数 次联盟调用，成功即停。
  */
 async function probeSigning(materialId, env) {
   const cfg = config(env);
@@ -323,11 +318,15 @@ async function probeSigning(materialId, env) {
 
   const attempts = [];
   for (const secret of secrets) {
-    for (const variant of SIGN_VARIANTS) {
-      const entry = { secret: secret.label, variant: variant.label };
+    for (const profile of REQUEST_PROFILES) {
+      const entry = {
+        secret: secret.label,
+        profile: profile.label,
+        gateway: profile.gateway,
+      };
       try {
-        const params = await buildParams(materialId, cfg, secret.value, variant);
-        const r = await callJd(params);
+        const params = buildParams(materialId, cfg, secret.value, profile);
+        const r = await callJd(params, profile.gateway);
         entry.jdCode = jdErrorCode(r.parsed);
         entry.accepted = Boolean(r.url);
         if (r.url) entry.url = r.url;
@@ -338,10 +337,10 @@ async function probeSigning(materialId, env) {
       if (entry.accepted) {
         return {
           attempts,
-          winner: { secret: secret.label, variant: variant.label },
-          hint: `把 index.js 里的 SIGN_VARIANTS 顺序调整成这一档（${
-            variant.label
-          }）+ 使用 ${secret.label}，收到的链接就是对的。`,
+          winner: { secret: secret.label, profile: profile.label },
+          hint:
+            `把 index.js 里 REQUEST_PROFILES 的第一项换成「${profile.label}」，` +
+            `并确保 secret 用 ${secret.label}，重新部署即可。`,
         };
       }
     }
@@ -350,15 +349,15 @@ async function probeSigning(materialId, env) {
   return {
     attempts,
     hint:
-      '所有组合都被拒，且基本都是 code 12。这说明问题不在签名方案的排列组合：' +
-      '要么凭据本身不是这两个值（appKey/appSecret 取错应用或已重置），' +
-      '要么请求还缺字段（例如 access_token）。' +
-      '下一步用 &debug=1 拿到 signedParams，填进京东开放平台的 API 测试工具对拍：' +
-      '工具算出的 sign 与返回的 sign 一致 → 凭据问题；不一致 → 方案问题。',
+      '所有档案 × secret 组合都被拒（多为 code 12）。签名规则已由文档确认，' +
+      '所以更可能是凭据本身不对（appKey/appSecret 取错应用、已重置、或不是同一对），' +
+      '或者接口路径不对（METHOD 与账号开通的接口不一致）。' +
+      '下一步：用 &debug=1 的 signedParams 填进京东开放平台的 API 测试工具对拍 —— ' +
+      '工具算出的 sign 与返回的 sign 一致 → 凭据问题；不一致 → 再回来查算法。',
   };
 }
 
-export { md5, sign, signatureBase, SIGN_VARIANTS };
+export { md5, sign, signatureBase, REQUEST_PROFILES };
 
 export default {
   async fetch(request, env) {
@@ -389,7 +388,6 @@ export default {
       const result = await convert(materialId, env);
       if (reqUrl.searchParams.get('debug') === '1') {
         result.method = METHOD;
-        result.gateway = GATEWAY;
         result.materialId = materialId;
       } else {
         // 签名相关的内容只在 debug 模式返回，避免默认把 app_key 暴露出去。

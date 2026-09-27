@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import worker, { md5, signatureBase, SIGN_VARIANTS } from './index.js';
+import worker, { md5, signatureBase, REQUEST_PROFILES } from './index.js';
 
 const METHOD_EXPECT = 'jd.union.open.promotion.bysubunionid.get';
 const ENV = { JD_APP_KEY: 'ak_test', JD_APP_SECRET: 'secret_test', JD_SITE_ID: 'site_123', APP_TOKEN: 'tok' };
@@ -43,10 +43,11 @@ check('returns clickURL', r.body.url === 'https://u.jd.com/mycode');
 
 // --- the outgoing request must be correctly signed and shaped ---
 const sent = captured.body;
-check('posts to the router gateway', captured.url === 'https://router.jd.com/api', captured.url);
+check('posts to the gateway the API doc specifies', captured.url === 'https://api.jd.com/routerjson', captured.url);
+check('omits sign_method by default (not in the doc param table)', !('sign_method' in sent), JSON.stringify(sent).slice(0, 80));
 check('method is bysubunionid', sent.method === 'jd.union.open.promotion.bysubunionid.get');
 check('app_key sent', sent.app_key === 'ak_test');
-check('sign_method md5', sent.sign_method === 'md5');
+check('v is sent', sent.v === '1.0');
 const recomputed = md5('secret_test' + Object.keys(sent).filter(k => k !== 'sign').sort().map(k => k + sent[k]).join('') + 'secret_test').toUpperCase();
 check('signature matches secret', sent.sign === recomputed, `${sent.sign} vs ${recomputed}`);
 const payload = JSON.parse(sent['360buy_param_json']);
@@ -98,6 +99,7 @@ check('sign details hidden by default',
 const loud = await call('token=tok&url=https://item.jd.com/1.html&debug=1');
 check('debug exposes signed params', !!(loud.body.signedParams && loud.body.signedParams.method === METHOD_EXPECT));
 check('debug exposes the signature base', (loud.body.signatureBase || '').includes('app_keyak_test'), loud.body.signatureBase);
+check('debug reports the gateway used', typeof loud.body.gateway === 'string' && loud.body.gateway.startsWith('https://'), loud.body.gateway);
 check('debug exposes the sign', typeof loud.body.sign === 'string' && loud.body.sign.length === 32);
 
 // --- signatureBase must never include "sign" itself ---
@@ -112,25 +114,18 @@ check('debug base has no sign value in it', !(dbg.body.signatureBase || '').incl
 const okReply = JSON.stringify({ jd_union_open_promotion_bysubunionid_get_responce: { code: '0', result: JSON.stringify({ code: 200, data: { clickURL: 'https://u.jd.com/ok' } }) } });
 const badSignReply = JSON.stringify({ error_response: { code: '12', zh_desc: 'invalid sign' } });
 
-// --- hmac-sha256 variant must match a reference implementation ---
-const hmacVariant = SIGN_VARIANTS.find((v) => v.signMethod === 'hmac-sha256');
-const hmacBase = hmacVariant.base({ b: '2', a: '1' });
-const hmacGot = await hmacVariant.hash('secret_test', hmacBase);
-const hmacRef = crypto.createHmac('sha256', 'secret_test').update(hmacBase).digest('hex');
-check('hmac-sha256 variant matches node crypto', hmacGot === hmacRef, `${hmacGot} vs ${hmacRef}`);
-
 // --- probe mode: let JD tell us which signing scheme is right ---
 replyQueue = [badSignReply, okReply];
 let pr = await call('token=tok&url=https://item.jd.com/1.html&probe=1');
-check('probe stops at the first accepted variant', pr.body.attempts.length === 2, JSON.stringify(pr.body.attempts));
+check('probe stops at the first accepted profile', pr.body.attempts.length === 2, JSON.stringify(pr.body.attempts));
 check('probe reports the rejected attempt', pr.body.attempts[0].accepted === false && pr.body.attempts[0].jdCode === '12');
-check('probe reports the winner', pr.body.attempts[1].accepted === true && pr.body.winner.variant.includes('URL 编码'), JSON.stringify(pr.body.winner));
+check('probe reports the winner', pr.body.attempts[1].accepted === true && typeof pr.body.winner.profile === 'string', JSON.stringify(pr.body.winner));
 check('probe returns the link it got', pr.body.attempts[1].url === 'https://u.jd.com/ok');
 check('probe never echoes a secret', !JSON.stringify(pr.body).includes('secret_test'), JSON.stringify(pr.body).slice(0, 120));
 
 replyQueue = Array(12).fill(badSignReply);
 pr = await call('token=tok&url=https://item.jd.com/1.html&probe=1');
-check('probe exhausts every secret x variant', pr.body.attempts.length === 10, String(pr.body.attempts.length));
+check('probe exhausts every secret x profile', pr.body.attempts.length === REQUEST_PROFILES.length * 2, String(pr.body.attempts.length));
 check('probe explains the dead end', pr.body.hint.includes('API 测试工具'), pr.body.hint);
 check('no winner reported when all fail', pr.body.winner === undefined);
 replyQueue = [];

@@ -74,39 +74,37 @@ node test.mjs
 
 **京东返回 `{"error_response":{"code":"12","zh_desc":"无效签名"}}`**
 
-这是好消息：请求已经到京东并被受理了，只是签名对不上。**用 `probe=1` 让京东自己告诉我们哪套规则对**：
+这是好消息：请求已经到京东并被受理了，只是签名对不上。**已经按文档修过两处**（见「已知不确定点」）：
+网关改为 `api.jd.com/routerjson`、默认不再发送文档参数表里没有的 `sign_method`。
+重新部署后先直连试一次：
+
+```bash
+curl -s "https://xxxx.workers.dev/?token=你的APP_TOKEN&url=https://item.jd.com/100276929104.html"
+```
+
+仍然报 12 的话，用 `probe=1` 把「请求档案 × secret」逐个打一遍京东，让京东说哪种能过：
 
 ```bash
 curl -s "https://xxxx.workers.dev/?token=你的APP_TOKEN&url=https://item.jd.com/100276929104.html&probe=1"
 ```
 
-它会把候选 `secret` × 候选签名方案逐个打一遍京东（成功即停），返回每一次的结果：
-
 ```json
 {
   "attempts": [
-    { "secret": "JD_APP_SECRET", "variant": "md5 / key+value / 原值 / 大写（默认）", "jdCode": "12", "accepted": false },
-    { "secret": "JD_APP_SECRET", "variant": "md5 / key+value / 值先 URL 编码 / 大写", "jdCode": null, "accepted": true, "url": "https://u.jd.com/xxx" }
+    { "secret": "JD_APP_SECRET", "profile": "文档网关 + 不传 sign_method（文档参数表里没有它）", "gateway": "https://api.jd.com/routerjson", "jdCode": "12", "accepted": false },
+    { "secret": "JD_APP_SECRET", "profile": "文档网关 + 传 sign_method=md5", "jdCode": null, "accepted": true, "url": "https://u.jd.com/xxx" }
   ],
-  "winner": { "secret": "JD_APP_SECRET", "variant": "md5 / key+value / 值先 URL 编码 / 大写" },
-  "hint": "把 index.js 里的 SIGN_VARIANTS 顺序调整成这一档……"
+  "winner": { "secret": "JD_APP_SECRET", "profile": "文档网关 + 传 sign_method=md5" },
+  "hint": "把 index.js 里 REQUEST_PROFILES 的第一项换成……"
 }
 ```
 
-候选方案定义在 `index.js` 的 `SIGN_VARIANTS`（值是否先 URL 编码、拼接是否用 `k=v&`、
-MD5 还是 HMAC-SHA256）。**有 winner** → 把它挪到 `SIGN_VARIANTS` 第一位再部署即可。
-**全部被拒** → 问题不在排列组合，而是凭据本身不对（取错应用、已重置），
-或请求还缺字段（例如 `access_token`）；下一步用 `debug=1` 的 `signedParams`
-填进京东开放平台的 API 测试工具对拍。
+候选档案定义在 `index.js` 的 `REQUEST_PROFILES`（网关地址 × 是否带 `sign_method`）。
+**有 winner** → 把它挪到第一位再部署。**全部被拒** → 签名规则已由文档确认，问题更可能
+在凭据本身（appKey/appSecret 不是同一对、取错应用、已重置）或接口路径与账号权限不匹配。
 
-probe 只回报哪一档通过和长度，**不回显任何密钥内容**。它会消耗若干次联盟接口
-调用（最坏 secret 数 × 方案数），查完别长期暴露这个接口。
-
-补充说明：
-
-1. **凭据带了空白。** `wrangler secret put` 会把 stdin 的换行一起存进密钥 —— 尾部带 `\n`
-   的 secret 产生的正是「无效签名」。本服务已对配置做 trim，重新部署即可排除。
-2. **凭据取错或填反了。** 确认没有把 siteId 填成 appKey、或用了别个应用的 appSecret。
+probe 只回报哪一档通过和长度，**不回显任何密钥内容**，但会消耗若干次联盟接口调用
+（最多 8 次），查完别长期暴露这个接口。
 
 **怎么确认服务真的能用**
 
@@ -119,7 +117,26 @@ curl -s "https://xxxx.workers.dev/?token=你的APP_TOKEN&url=https://item.jd.com
 
 ## 已知不确定点
 
-- **接口名 / 字段**：默认用 `jd.union.open.promotion.bysubunionid.get` + `promotionCodeReq`。京东改过几版，如果报签名错或参数错，用 `?debug=1` 看实际请求再对照文档调整 `METHOD` / 请求体。
-- **归因是否生效**：本服务只负责换一条合法的推广链。佣金有没有记到你名下，**必须用一笔小额订单在自己的联盟后台确认** —— 这个我无法替你验证。
-- **覆盖率**：只有能从短链还原出商品页的链接才换得了（随机抽样约三分之一）。领券/活动类短链的目标是加密的，拆不出来，详见 `lib/services/short_link_resolver.dart` 的类注释。
+依据仓库里那两份官方文档（`../api调用详解.doc`、`../平台网关系统错误码.doc`）更新如下：
+
+**已经确定**
+
+- **网关**：`https://api.jd.com/routerjson`（文档「三、调用入口」）。错误码 12「无效签名」
+  属于这个 1.0 网关，所以必须打这个地址 —— 之前用的 `router.jd.com/api` 已改为仅作对照。
+- **签名算法**：参数按名升序 → `key+value` 直接相连 → appSecret 夹两端 → MD5 → 转大写；
+  文档明确写了「**value 无需编码**」，即签名用原始值，只有拼进 URL 时才 encode。
+  这与代码默认实现一致。
+- **`sign_method` 不是文档里的参数**：文档「四、调用参数」的系统参数表只有
+  `method / access_token / app_key / sign / timestamp / format / v`，签名示例里也没有
+  `sign_method`。默认请求已不再发送它。
+- **access_token**：文档标注「采用 OAuth 授权方式是必填」。转链接口是非授权的，不传。
+
+**仍不确定**
+
+- **接口名 / 字段**：`jd.union.open.promotion.bysubunionid.get` + `promotionCodeReq` 仍以
+  京东联盟自己的接口文档为准（那两份文档讲的是网关通用规则，不含具体接口字段）。
+- **归因是否生效**：本服务只负责换一条合法的推广链。佣金有没有记到你名下，
+  **必须用一笔小额订单在自己的联盟后台确认**。
+- **覆盖率**：只有能从短链还原出商品页的链接才换得了（随机抽样约三分之一）。
+  领券/活动类短链的目标是加密的，拆不出来，详见 `lib/services/short_link_resolver.dart`。
 - 每换一条链都会消耗你的联盟接口调用额度，所以 `APP_TOKEN` 建议一定设置。
