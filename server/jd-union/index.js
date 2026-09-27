@@ -104,7 +104,7 @@ function md5(input) {
 }
 
 // ---------------------------------------------------------------------------
-// 京东签名：secret + 按 key 排序拼接的 key+value + secret，MD5 后转大写
+// 京东签名
 // ---------------------------------------------------------------------------
 
 function timestamp() {
@@ -116,20 +116,80 @@ function timestamp() {
   );
 }
 
-/** The string JD signs: `key+value` pairs sorted by key, no separators.
- *  `sign` is always excluded, so this stays correct even when called after
- *  the signature has been attached. */
-function signatureBase(params) {
+/** 参与签名的参数，按 key 升序，且始终排除 sign。 */
+function signedPairs(params) {
   return Object.keys(params)
     .filter((k) => k !== 'sign')
     .sort()
-    .map((k) => k + params[k])
+    .map((k) => [k, String(params[k])]);
+}
+
+/** 默认方案待签的字符串：`key+value` 直接拼接，值为原值。
+ *  `sign` 永远排除，所以签名附加之后再调用也依然正确。 */
+function signatureBase(params) {
+  return signedPairs(params)
+    .map(([k, v]) => k + v)
     .join('');
 }
 
 function sign(params, secret) {
   return md5(secret + signatureBase(params) + secret).toUpperCase();
 }
+
+async function hmacSha256Hex(secret, message) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const mac = await crypto.subtle.sign('HMAC', key, enc.encode(message));
+  return [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * 候选签名方案。
+ *
+ * 京东的签名规则在平台换代时变过（值是否先 URL 编码、拼接是否用 `k=v&`、
+ * MD5 还是 HMAC-SHA256），而文档在登录墙后面、外部查不到。与其猜，不如让
+ * `?probe=1` 拿同一份参数把每种方案都打一遍，由京东告诉我们哪种能过。
+ *
+ * 第一项是默认方案，跑起来就用它。
+ */
+const SIGN_VARIANTS = [
+  {
+    label: 'md5 / key+value / 原值 / 大写（默认）',
+    signMethod: 'md5',
+    base: (p) => signedPairs(p).map(([k, v]) => k + v).join(''),
+    hash: (secret, base) => md5(secret + base + secret).toUpperCase(),
+  },
+  {
+    label: 'md5 / key+value / 值先 URL 编码 / 大写',
+    signMethod: 'md5',
+    base: (p) => signedPairs(p).map(([k, v]) => k + encodeURIComponent(v)).join(''),
+    hash: (secret, base) => md5(secret + base + secret).toUpperCase(),
+  },
+  {
+    label: 'md5 / query 形式 k=v&k=v / 大写',
+    signMethod: 'md5',
+    base: (p) => signedPairs(p).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&'),
+    hash: (secret, base) => md5(secret + base + secret).toUpperCase(),
+  },
+  {
+    label: 'md5 / key+value / 原值 / 小写',
+    signMethod: 'md5',
+    base: (p) => signedPairs(p).map(([k, v]) => k + v).join(''),
+    hash: (secret, base) => md5(secret + base + secret),
+  },
+  {
+    label: 'hmac-sha256 / key+value / 原值',
+    signMethod: 'hmac-sha256',
+    base: (p) => signedPairs(p).map(([k, v]) => k + v).join(''),
+    hash: (secret, base) => hmacSha256Hex(secret, base),
+  },
+];
 
 // ---------------------------------------------------------------------------
 // 转链
@@ -173,15 +233,15 @@ function config(env) {
   };
 }
 
-/** Builds the signed parameter set for one JD call. */
-function buildParams(materialId, cfg, secret) {
+/** Builds the signed parameter set for one JD call under [variant]. */
+async function buildParams(materialId, cfg, secret, variant = SIGN_VARIANTS[0]) {
   const params = {
     method: METHOD,
     app_key: cfg.appKey,
     timestamp: timestamp(),
     format: 'json',
     v: '1.0',
-    sign_method: 'md5',
+    sign_method: variant.signMethod,
     '360buy_param_json': JSON.stringify({
       promotionCodeReq: {
         materialId,
@@ -192,7 +252,7 @@ function buildParams(materialId, cfg, secret) {
       },
     }),
   };
-  params.sign = sign(params, secret);
+  params.sign = await variant.hash(secret, variant.base(params));
   return params;
 }
 
@@ -231,7 +291,7 @@ async function callJd(params) {
 
 async function convert(materialId, env) {
   const cfg = config(env);
-  const params = buildParams(materialId, cfg, cfg.appSecret);
+  const params = await buildParams(materialId, cfg, cfg.appSecret);
   const { status, raw, parsed, url } = await callJd(params);
   if (url) return { url };
 
@@ -248,46 +308,57 @@ async function convert(materialId, env) {
 }
 
 /**
- * 用同一份参数分别以「配置的 secret」和「appKey 当 secret」各调一次京东，
- * 用来区分两种失败：全都无效签名 = 算法或参与签名的字段不对；某个通过 =
- * 凭据问题（secret 取错、两值互换、多了空白等）。
- * 只回报哪一档通过了，不回显任何密钥内容。
+ * 拿同一份参数，把每个候选 secret × 每种签名方案都打一遍京东，看哪种能过。
+ *
+ * 这是为「没有文档、无法本地复现」准备的：京东自己会告诉我们哪套规则对。
+ * 只回报「哪一档通过」和长度，不回显任何密钥内容。
+ * 最坏情况会消耗 secret 数 × 方案数 次联盟接口调用，成功即提前结束。
  */
-async function probeSecrets(materialId, env) {
+async function probeSigning(materialId, env) {
   const cfg = config(env);
-  const candidates = [
-    { label: 'JD_APP_SECRET', secret: cfg.appSecret },
-    { label: 'JD_APP_KEY（若把 key 误当 secret）', secret: cfg.appKey },
-  ];
+  const secrets = [
+    { label: 'JD_APP_SECRET', value: cfg.appSecret },
+    { label: 'JD_APP_KEY（若把 key 误当 secret）', value: cfg.appKey },
+  ].filter((s) => s.value);
 
-  const results = [];
-  for (const candidate of candidates) {
-    if (!candidate.secret) continue;
-    const entry = {
-      tried: candidate.label,
-      length: candidate.secret.length,
-    };
-    try {
-      const params = buildParams(materialId, cfg, candidate.secret);
-      const r = await callJd(params);
-      entry.jdCode = jdErrorCode(r.parsed);
-      entry.accepted = Boolean(r.url);
-      if (r.url) entry.url = r.url;
-    } catch (e) {
-      entry.error = String((e && e.message) || e);
+  const attempts = [];
+  for (const secret of secrets) {
+    for (const variant of SIGN_VARIANTS) {
+      const entry = { secret: secret.label, variant: variant.label };
+      try {
+        const params = await buildParams(materialId, cfg, secret.value, variant);
+        const r = await callJd(params);
+        entry.jdCode = jdErrorCode(r.parsed);
+        entry.accepted = Boolean(r.url);
+        if (r.url) entry.url = r.url;
+      } catch (e) {
+        entry.error = String((e && e.message) || e);
+      }
+      attempts.push(entry);
+      if (entry.accepted) {
+        return {
+          attempts,
+          winner: { secret: secret.label, variant: variant.label },
+          hint: `把 index.js 里的 SIGN_VARIANTS 顺序调整成这一档（${
+            variant.label
+          }）+ 使用 ${secret.label}，收到的链接就是对的。`,
+        };
+      }
     }
-    results.push(entry);
   }
 
   return {
-    probe: results,
-    hint: results.some((r) => r.accepted)
-      ? '有候选通过：是凭据问题，请按通过的那一档重设 secret。'
-      : '全部候选都无效签名：更可能是签名算法或参与签名的字段，而不是凭据。',
+    attempts,
+    hint:
+      '所有组合都被拒，且基本都是 code 12。这说明问题不在签名方案的排列组合：' +
+      '要么凭据本身不是这两个值（appKey/appSecret 取错应用或已重置），' +
+      '要么请求还缺字段（例如 access_token）。' +
+      '下一步用 &debug=1 拿到 signedParams，填进京东开放平台的 API 测试工具对拍：' +
+      '工具算出的 sign 与返回的 sign 一致 → 凭据问题；不一致 → 方案问题。',
   };
 }
 
-export { md5, sign, signatureBase };
+export { md5, sign, signatureBase, SIGN_VARIANTS };
 
 export default {
   async fetch(request, env) {
@@ -312,7 +383,7 @@ export default {
 
     try {
       if (reqUrl.searchParams.get('probe') === '1') {
-        return json(await probeSecrets(materialId, env), 200);
+        return json(await probeSigning(materialId, env), 200);
       }
 
       const result = await convert(materialId, env);

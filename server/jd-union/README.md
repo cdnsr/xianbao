@@ -74,41 +74,39 @@ node test.mjs
 
 **京东返回 `{"error_response":{"code":"12","zh_desc":"无效签名"}}`**
 
-这是好消息：请求已经到京东并被受理了，只是签名对不上。**先用 `probe=1` 一次分清是哪种问题**：
+这是好消息：请求已经到京东并被受理了，只是签名对不上。**用 `probe=1` 让京东自己告诉我们哪套规则对**：
 
 ```bash
 curl -s "https://xxxx.workers.dev/?token=你的APP_TOKEN&url=https://item.jd.com/100276929104.html&probe=1"
 ```
 
-它会用同一份参数分别以「配置的 secret」和「appKey 当 secret」各调京东一次：
+它会把候选 `secret` × 候选签名方案逐个打一遍京东（成功即停），返回每一次的结果：
 
 ```json
 {
-  "probe": [
-    { "tried": "JD_APP_SECRET", "length": 32, "jdCode": "12", "accepted": false },
-    { "tried": "JD_APP_KEY（若把 key 误当 secret）", "length": 32, "jdCode": "0", "accepted": true }
+  "attempts": [
+    { "secret": "JD_APP_SECRET", "variant": "md5 / key+value / 原值 / 大写（默认）", "jdCode": "12", "accepted": false },
+    { "secret": "JD_APP_SECRET", "variant": "md5 / key+value / 值先 URL 编码 / 大写", "jdCode": null, "accepted": true, "url": "https://u.jd.com/xxx" }
   ],
-  "hint": "有候选通过：是凭据问题，请按通过的那一档重设 secret。"
+  "winner": { "secret": "JD_APP_SECRET", "variant": "md5 / key+value / 值先 URL 编码 / 大写" },
+  "hint": "把 index.js 里的 SIGN_VARIANTS 顺序调整成这一档……"
 }
 ```
 
-- **有候选通过** → 凭据问题：secret 取错、和 appKey 互换、或多带了空白。按通过的档位
-  重新 `npx wrangler secret put JD_APP_SECRET`。
-- **全部都是 `code 12`** → 更像是签名算法或参与签名的字段不对，看点 3。
+候选方案定义在 `index.js` 的 `SIGN_VARIANTS`（值是否先 URL 编码、拼接是否用 `k=v&`、
+MD5 还是 HMAC-SHA256）。**有 winner** → 把它挪到 `SIGN_VARIANTS` 第一位再部署即可。
+**全部被拒** → 问题不在排列组合，而是凭据本身不对（取错应用、已重置），
+或请求还缺字段（例如 `access_token`）；下一步用 `debug=1` 的 `signedParams`
+填进京东开放平台的 API 测试工具对拍。
 
-probe 只回报「哪一档通过了」和长度，**不会回显任何密钥内容**。查完记得不要长期暴露这个接口。
+probe 只回报哪一档通过和长度，**不回显任何密钥内容**。它会消耗若干次联盟接口
+调用（最坏 secret 数 × 方案数），查完别长期暴露这个接口。
 
-进一步排查：
+补充说明：
 
 1. **凭据带了空白。** `wrangler secret put` 会把 stdin 的换行一起存进密钥 —— 尾部带 `\n`
    的 secret 产生的正是「无效签名」。本服务已对配置做 trim，重新部署即可排除。
 2. **凭据取错或填反了。** 确认没有把 siteId 填成 appKey、或用了别个应用的 appSecret。
-3. **算法或字段不同。** 加 `&debug=1`，返回里会多出 `signedParams` / `signatureBase` / `sign`。
-   把 `signedParams` 填进京东开放平台的 API 测试工具，对比它生成的 `sign`：
-   - **不一致** → 改 `index.js` 的 `signatureBase()`（注意 `sign` 本身必须排除在签名外）
-   - **一致** → 回到第 1、2 条查凭据
-
-   `debug=1` 会带出 `app_key`，排查完就别再用它了。
 
 **怎么确认服务真的能用**
 

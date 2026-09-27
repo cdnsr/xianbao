@@ -1,4 +1,5 @@
-import worker, { md5, signatureBase } from './index.js';
+import crypto from 'node:crypto';
+import worker, { md5, signatureBase, SIGN_VARIANTS } from './index.js';
 
 const METHOD_EXPECT = 'jd.union.open.promotion.bysubunionid.get';
 const ENV = { JD_APP_KEY: 'ak_test', JD_APP_SECRET: 'secret_test', JD_SITE_ID: 'site_123', APP_TOKEN: 'tok' };
@@ -108,21 +109,30 @@ check('signatureBase excludes sign', signatureBase({ method: 'm', app_key: 'k', 
 const dbg = await call('token=tok&url=https://item.jd.com/1.html&debug=1');
 check('debug base has no sign value in it', !(dbg.body.signatureBase || '').includes(dbg.body.sign), dbg.body.signatureBase);
 
-// --- probe mode: tells credential problems apart from algorithm problems ---
 const okReply = JSON.stringify({ jd_union_open_promotion_bysubunionid_get_responce: { code: '0', result: JSON.stringify({ code: 200, data: { clickURL: 'https://u.jd.com/ok' } }) } });
-const badSignReply = JSON.stringify({ error_response: { code: '12', zh_desc: '无效签名' } });
+const badSignReply = JSON.stringify({ error_response: { code: '12', zh_desc: 'invalid sign' } });
 
+// --- hmac-sha256 variant must match a reference implementation ---
+const hmacVariant = SIGN_VARIANTS.find((v) => v.signMethod === 'hmac-sha256');
+const hmacBase = hmacVariant.base({ b: '2', a: '1' });
+const hmacGot = await hmacVariant.hash('secret_test', hmacBase);
+const hmacRef = crypto.createHmac('sha256', 'secret_test').update(hmacBase).digest('hex');
+check('hmac-sha256 variant matches node crypto', hmacGot === hmacRef, `${hmacGot} vs ${hmacRef}`);
+
+// --- probe mode: let JD tell us which signing scheme is right ---
 replyQueue = [badSignReply, okReply];
 let pr = await call('token=tok&url=https://item.jd.com/1.html&probe=1');
-check('probe tries both candidates', pr.body.probe.length === 2, JSON.stringify(pr.body.probe));
-check('probe reports the failing one', pr.body.probe[0].accepted === false && pr.body.probe[0].jdCode === '12');
-check('probe reports the passing one', pr.body.probe[1].accepted === true && pr.body.probe[1].url === 'https://u.jd.com/ok');
-check('probe points at credentials when one passes', pr.body.hint.includes('凭据'), pr.body.hint);
+check('probe stops at the first accepted variant', pr.body.attempts.length === 2, JSON.stringify(pr.body.attempts));
+check('probe reports the rejected attempt', pr.body.attempts[0].accepted === false && pr.body.attempts[0].jdCode === '12');
+check('probe reports the winner', pr.body.attempts[1].accepted === true && pr.body.winner.variant.includes('URL 编码'), JSON.stringify(pr.body.winner));
+check('probe returns the link it got', pr.body.attempts[1].url === 'https://u.jd.com/ok');
 check('probe never echoes a secret', !JSON.stringify(pr.body).includes('secret_test'), JSON.stringify(pr.body).slice(0, 120));
 
-replyQueue = [badSignReply, badSignReply];
+replyQueue = Array(12).fill(badSignReply);
 pr = await call('token=tok&url=https://item.jd.com/1.html&probe=1');
-check('probe points at the algorithm when none pass', pr.body.hint.includes('算法'), pr.body.hint);
+check('probe exhausts every secret x variant', pr.body.attempts.length === 10, String(pr.body.attempts.length));
+check('probe explains the dead end', pr.body.hint.includes('API 测试工具'), pr.body.hint);
+check('no winner reported when all fail', pr.body.winner === undefined);
 replyQueue = [];
 
 console.log(fail === 0 ? '\nALL PASS' : `\n${fail} FAILURE(S)`);
