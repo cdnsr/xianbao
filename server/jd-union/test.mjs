@@ -130,5 +130,53 @@ check('probe explains the dead end', pr.body.hint.includes('API 测试工具'), 
 check('no winner reported when all fail', pr.body.winner === undefined);
 replyQueue = [];
 
+// --- the real response shapes (taken from a live call) ---
+// Success arrives nested: outer code "0" plus the business result as a JSON string.
+const realOk = JSON.stringify({
+  jd_union_open_promotion_bysubunionid_get_responce: {
+    code: '0',
+    getResult: JSON.stringify({ code: 200, data: { clickURL: 'https://u.jd.com/real' } }),
+  },
+});
+// ...and so does a business failure. This one is verbatim from a real call.
+const realForbidden = JSON.stringify({
+  jd_union_open_promotion_bysubunionid_get_responce: {
+    code: '0',
+    getResult: JSON.stringify({ code: 403, message: '无访问权限', requestId: 'o_0653f335_mujq8d68_31844582' }),
+  },
+});
+
+reply = realOk;
+let rr = await call('token=tok&url=https://item.jd.com/1.html');
+check('finds clickURL in the real nested success shape', rr.body.url === 'https://u.jd.com/real', JSON.stringify(rr.body).slice(0, 140));
+
+reply = realForbidden;
+rr = await call('token=tok&url=https://item.jd.com/1.html');
+check('surfaces the business error code', rr.body.jdCode === '403', JSON.stringify(rr.body).slice(0, 200));
+check('surfaces the business error message', rr.body.jdMessage === '无访问权限', String(rr.body.jdMessage));
+check('explains a 403', typeof rr.body.hint === 'string' && rr.body.hint.includes('access_token'), String(rr.body.hint));
+
+// --- access_token ---
+captured = null;
+await call('token=tok&url=https://item.jd.com/1.html', { ...ENV, JD_ACCESS_TOKEN: ' tok_value ' });
+check('sends a trimmed access_token when configured', captured.body.access_token === 'tok_value', String(captured.body.access_token));
+check('access_token participates in the signature',
+  captured.body.sign === md5('secret_test' + Object.keys(captured.body).filter((k) => k !== 'sign').sort().map((k) => k + captured.body[k]).join('') + 'secret_test').toUpperCase());
+
+captured = null;
+await call('token=tok&url=https://item.jd.com/1.html');
+check('omits access_token when not configured', !('access_token' in captured.body));
+
+// --- probe=methods ---
+replyQueue = [realForbidden, realForbidden, realOk];
+const mp = await call('token=tok&url=https://item.jd.com/1.html&probe=methods');
+check('method probe stops at the first accepted method', mp.body.attempts.length === 3, JSON.stringify(mp.body.attempts));
+check('method probe reports business codes', mp.body.attempts[0].businessCode === '403');
+check('method probe names a winner', typeof mp.body.winner.method === 'string' && mp.body.winner.method.includes('byunionid'), JSON.stringify(mp.body.winner));
+
+replyQueue = Array(4).fill(realForbidden);
+const mp2 = await call('token=tok&url=https://item.jd.com/1.html&probe=methods');
+check('method probe says the code is identical everywhere', mp2.body.hint.includes('不在接口名'), String(mp2.body.hint));
+replyQueue = [];
 console.log(fail === 0 ? '\nALL PASS' : `\n${fail} FAILURE(S)`);
 process.exit(fail ? 1 : 0);

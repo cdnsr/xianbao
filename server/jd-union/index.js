@@ -35,8 +35,15 @@ const DOC_GATEWAY = 'https://api.jd.com/routerjson';
 /** 之前误用的地址，仅留给 probe 对照。 */
 const LEGACY_GATEWAY = 'https://router.jd.com/api';
 
-/** 转链接口。按京东联盟文档可能需要在 bysubunionid / common / byunionid 之间切换。 */
+/** 转链接口。账号开通的可能是其中某一个，`?probe=methods` 可逐个试。 */
 const METHOD = 'jd.union.open.promotion.bysubunionid.get';
+
+/** 同一件事的几个写法，用于确认账号到底开通了哪个接口。 */
+const METHOD_CANDIDATES = [
+  'jd.union.open.promotion.bysubunionid.get',
+  'jd.union.open.promotion.common.get',
+  'jd.union.open.promotion.byunionid.get',
+];
 
 // ---------------------------------------------------------------------------
 // MD5（Workers 的 crypto.subtle 不提供 MD5，只能用纯 JS 实现）
@@ -222,17 +229,26 @@ function config(env) {
     siteId: (env.JD_SITE_ID || '').trim(),
     positionId: (env.JD_POSITION_ID || '').trim(),
     subUnionId: (env.JD_SUB_UNION_ID || '').trim(),
+    accessToken: (env.JD_ACCESS_TOKEN || '').trim(),
   };
 }
 
 /** Builds the signed parameter set for one JD call under [profile]. */
-function buildParams(materialId, cfg, secret, profile = REQUEST_PROFILES[0]) {
+function buildParams(
+  materialId,
+  cfg,
+  secret,
+  profile = REQUEST_PROFILES[0],
+  method = METHOD,
+) {
   const params = {
-    method: METHOD,
+    method,
     app_key: cfg.appKey,
     timestamp: timestamp(),
     format: 'json',
     v: '1.0',
+    // 联盟接口按账号授权，通常必须带 access_token；没配就不传。
+    ...(cfg.accessToken ? { access_token: cfg.accessToken } : {}),
     ...(profile.signMethod ? { sign_method: profile.signMethod } : {}),
     '360buy_param_json': JSON.stringify({
       promotionCodeReq: {
@@ -258,10 +274,45 @@ function encodeBody(params) {
     .join('&');
 }
 
-/** JD reports failures as `{"error_response":{"code":"12",...}}`. */
+/** JD reports gateway failures as `{"error_response":{"code":"12",...}}`. */
 function jdErrorCode(parsed) {
   const err = parsed && parsed.error_response;
   return err && err.code != null ? String(err.code) : null;
+}
+
+/**
+ * The business layer answers `{"..._responce":{"code":"0","getResult":"{...}"}}`
+ * where the inner JSON carries the real outcome - e.g.
+ * `{"code":403,"message":"无访问权限"}`. The outer "0" only means the gateway
+ * call itself succeeded, so dig the inner result out.
+ */
+function jdBusinessError(parsed) {
+  const found = [];
+
+  const walk = (value) => {
+    if (value == null) return;
+    if (typeof value === 'string') {
+      if (value.startsWith('{')) {
+        try {
+          walk(JSON.parse(value));
+        } catch {
+          /* not JSON, ignore */
+        }
+      }
+      return;
+    }
+    if (typeof value !== 'object') return;
+
+    const code = value.code;
+    const ok = code == null || code === 0 || code === '0' || code === 200 || code === '200';
+    if (!ok) {
+      found.push({ code: String(code), message: String(value.message || value.msg || '') });
+    }
+    for (const child of Object.values(value)) walk(child);
+  };
+
+  walk(parsed);
+  return found[0] ?? null;
 }
 
 async function callJd(params, gateway = DOC_GATEWAY) {
@@ -288,10 +339,20 @@ async function convert(materialId, env) {
   const { status, raw, parsed, url } = await callJd(params, profile.gateway);
   if (url) return { url };
 
+  const business = jdBusinessError(parsed);
   return {
     error: '京东未返回推广链接',
     status,
-    jdCode: jdErrorCode(parsed),
+    // 网关层的失败（如 12 无效签名），或业务层挖出来的码（如 403 无访问权限）。
+    jdCode: jdErrorCode(parsed) ?? business?.code ?? null,
+    ...(business?.message ? { jdMessage: business.message } : {}),
+    ...(business?.code === '403'
+      ? {
+          hint:
+            '京东已受理请求，是账号侧没有权限。通常是缺 access_token（联盟接口按账号授权，' +
+            '需要 OAuth 令牌）或该接口未在开放平台为这个应用开通。',
+        }
+      : {}),
     raw: raw.slice(0, 800),
     // ?debug=1 才返回，见 fetch 里对这几个字段的处理。
     gateway: profile.gateway,
@@ -357,6 +418,50 @@ async function probeSigning(materialId, env) {
   };
 }
 
+/**
+ * 逐个接口名打一遍，确认账号到底开通了哪个。
+ * 全部返回同一个业务错误码（例如 403）时，说明问题不在接口名，而在授权。
+ */
+async function probeMethods(materialId, env) {
+  const cfg = config(env);
+  const profile = REQUEST_PROFILES[0];
+  const attempts = [];
+
+  for (const method of METHOD_CANDIDATES) {
+    const entry = { method };
+    try {
+      const params = buildParams(materialId, cfg, cfg.appSecret, profile, method);
+      const r = await callJd(params, profile.gateway);
+      const business = jdBusinessError(r.parsed);
+      entry.gatewayCode = jdErrorCode(r.parsed);
+      entry.businessCode = business?.code ?? null;
+      if (business?.message) entry.message = business.message;
+      entry.accepted = Boolean(r.url);
+      if (r.url) entry.url = r.url;
+    } catch (e) {
+      entry.error = String((e && e.message) || e);
+    }
+    attempts.push(entry);
+    if (entry.accepted) {
+      return {
+        attempts,
+        winner: { method },
+        hint: `把 index.js 的 METHOD 改成 ${method}，重新部署即可。`,
+      };
+    }
+  }
+
+  const codes = new Set(attempts.map((a) => a.businessCode ?? a.gatewayCode));
+  return {
+    attempts,
+    hint:
+      codes.size === 1
+        ? `所有接口名返回同一个码（${[...codes][0]}）：问题不在接口名。403 通常是缺 ` +
+          'access_token（联盟接口按账号授权）或接口未为应用开通。'
+        : '各接口名返回的码不同，挑一个不是 403 的再试，那说明该接口对本应用可用。',
+  };
+}
+
 export { md5, sign, signatureBase, REQUEST_PROFILES };
 
 export default {
@@ -381,7 +486,11 @@ export default {
     }
 
     try {
-      if (reqUrl.searchParams.get('probe') === '1') {
+      const probe = reqUrl.searchParams.get('probe');
+      if (probe === 'methods') {
+        return json(await probeMethods(materialId, env), 200);
+      }
+      if (probe === '1') {
         return json(await probeSigning(materialId, env), 200);
       }
 

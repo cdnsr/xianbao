@@ -31,9 +31,41 @@ npx wrangler login
 npx wrangler secret put JD_APP_KEY
 npx wrangler secret put JD_APP_SECRET
 npx wrangler secret put JD_SITE_ID
-npx wrangler secret put APP_TOKEN      # 自己定一个口令，防止别人白用你的额度
+npx wrangler secret put APP_TOKEN        # 自己定一个口令，防止别人白用你的额度
+npx wrangler secret put JD_ACCESS_TOKEN  # 联盟接口按账号授权，一般必须传（见下）
 npx wrangler deploy
 ```
+
+### 关于 JD_ACCESS_TOKEN
+
+联盟的 `jd.union.open.promotion.*` 接口是**按账号授权**的，只有 appKey/appSecret 通常不够 ——
+少了它京东会在业务层返回 `{"code":403,"message":"无访问权限"}`（网关签名校验是通过的）。
+
+获取方式（OAuth，自用授权自己的账号即可，流程以开放平台文档为准）：
+
+1. 浏览器访问
+   `https://oauth.jd.com/oauth/authorize?app_key=<appKey>&response_type=code&redirect_uri=<应用回调地址>&state=1`
+2. 用你自己的京东账号登录并同意授权，回调地址会带上 `?code=xxxxxx`
+3. 拿 code 换令牌：
+
+   ```bash
+   curl -s -X POST "https://oauth.jd.com/oauth/token"      -d grant_type=authorization_code -d client_id=<appKey>      -d client_secret=<appSecret> -d code=<上一步的code>      -d redirect_uri=<同一个回调地址>
+   ```
+
+   返回里的 `access_token` 就是 `JD_ACCESS_TOKEN`，有效期通常一年，到期需重新授权。
+4. `npx wrangler secret put JD_ACCESS_TOKEN`
+
+如果加了令牌仍然 403，就是**该接口没有为这个应用开通** —— 去开放平台控制台的
+「应用管理 → 接口权限」申请 `jd.union.open.promotion.*`。
+
+不确定是接口名不对还是授权不对时，可以逐个试：
+
+```bash
+curl -s "https://xxxx.workers.dev/?token=你的APP_TOKEN&url=https://item.jd.com/100276929104.html&probe=methods"
+```
+
+它会把 `bysubunionid / common / byunionid` 三个接口名各打一次：若返回同一个业务码，
+问题就不在接口名，而在授权；若某个返回的不是 403，那个就是本应用可用的接口。
 
 部署完会得到一个 `https://xxxx.workers.dev` 地址。
 
@@ -129,7 +161,9 @@ curl -s "https://xxxx.workers.dev/?token=你的APP_TOKEN&url=https://item.jd.com
 - **`sign_method` 不是文档里的参数**：文档「四、调用参数」的系统参数表只有
   `method / access_token / app_key / sign / timestamp / format / v`，签名示例里也没有
   `sign_method`。默认请求已不再发送它。
-- **access_token**：文档标注「采用 OAuth 授权方式是必填」。转链接口是非授权的，不传。
+- **access_token 是必须的**：早期以为转链接口非授权、不用传，实测**不成立** ——
+  不带它时网关签名通过，但业务层返回 `{"code":403,"message":"无访问权限"}`。
+  文档也把 `access_token` 标为必传（OAuth 授权方式）。现改为配置了就带上。
 
 **仍不确定**
 
