@@ -18,6 +18,31 @@ class MainShell extends StatefulWidget {
   State<MainShell> createState() => _MainShellState();
 }
 
+/// Decides the bottom bar's visibility after one scroll update.
+///
+/// [pixels] is the list's current scroll offset and [delta] how much it moved
+/// since the previous update. Flutter computes `delta` as
+/// `pixels - oldPixels`, so a **positive delta means the list advanced**, i.e.
+/// the user swiped upwards.
+///
+/// Returns the new visibility, or null to leave it unchanged. Any reverse
+/// movement - or being back at the top - always restores the bar, so it can
+/// never get stuck hidden.
+bool? navBarVisibleAfterScroll({
+  required double pixels,
+  required double delta,
+  double hideThreshold = _navHideThreshold,
+}) {
+  if (delta == 0) return null;
+  if (delta < 0 || pixels <= 0) return true;
+  if (pixels > hideThreshold) return false;
+  return null;
+}
+
+/// The bar only hides once the list has moved past this, so a barely-there
+/// jitter near the top of the list does not make it flicker.
+const double _navHideThreshold = 24;
+
 class _MainShellState extends State<MainShell> {
   final List<Widget> _pages = [const HomePage(), const SearchPage()];
   bool _startupUpdateChecked = false;
@@ -25,10 +50,6 @@ class _MainShellState extends State<MainShell> {
   /// Whether the bottom bar is shown. Only the home article list may hide it;
   /// tapping a tab restores it.
   bool _navVisible = true;
-
-  /// The bar only hides once the list has moved past this, so a barely-there
-  /// jitter near the top of the list does not make it flicker.
-  static const double _navHideThreshold = 24;
 
   @override
   void initState() {
@@ -74,14 +95,11 @@ class _MainShellState extends State<MainShell> {
     if (notification.metrics.axis != Axis.vertical) return false;
     if (notification is! ScrollUpdateNotification) return false;
 
-    final delta = notification.scrollDelta ?? 0;
-    if (delta == 0) return false;
-
-    if (delta < 0 || notification.metrics.pixels <= 0) {
-      _setNavVisible(true);
-    } else if (notification.metrics.pixels > _navHideThreshold) {
-      _setNavVisible(false);
-    }
+    final visible = navBarVisibleAfterScroll(
+      pixels: notification.metrics.pixels,
+      delta: notification.scrollDelta ?? 0,
+    );
+    if (visible != null) _setNavVisible(visible);
     // Never swallow the notification; other listeners still need it.
     return false;
   }
