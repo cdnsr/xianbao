@@ -83,6 +83,48 @@ class WebViewDarkTheme {
       return L <= 90;
     }
 
+    // Inline properties the injector may override, and therefore must restore.
+    var TRACKED = ['background', 'background-color', 'background-image', 'color'];
+
+    // Snapshot only the element's OWN inline values. Computed styles must not
+    // be captured, or restoring would freeze stylesheet colors into inline
+    // styles and permanently flatten the page.
+    function remember(el) {
+      if (el.__xbOrig) return;
+      var orig = {};
+      for (var i = 0; i < TRACKED.length; i++) {
+        orig[TRACKED[i]] = el.style.getPropertyValue(TRACKED[i]);
+      }
+      el.__xbOrig = orig;
+    }
+
+    function setImportant(el, prop, value) {
+      if (el.style.getPropertyValue(prop) === value) return;
+      remember(el);
+      el.style.setProperty(prop, value, 'important');
+    }
+
+    // Undo every override this injector applied. Callers must disconnect the
+    // MutationObserver first, otherwise these style writes would be observed
+    // and immediately re-painted to dark.
+    function restoreAll() {
+      var all = document.querySelectorAll('*');
+      for (var i = 0; i < all.length; i++) {
+        var el = all[i];
+        var orig = el.__xbOrig;
+        if (!orig) continue;
+        for (var j = 0; j < TRACKED.length; j++) {
+          var p = TRACKED[j];
+          if (orig[p]) el.style.setProperty(p, orig[p]);
+          else el.style.removeProperty(p);
+        }
+        el.__xbOrig = null;
+      }
+    }
+
+    // Exposed so removeJs (a separate script execution) can reuse it.
+    window.__xianbaoDarkRestore = restoreAll;
+
     function paintLightNodes() {
       var nodes = document.querySelectorAll(
         'html,body,div,section,main,aside,header,footer,nav,ul,ol,li,table,thead,tbody,tr,td,th,article,form,fieldset,p,span,a,label,h1,h2,h3,h4,h5,h6,input,textarea,button'
@@ -94,12 +136,12 @@ class WebViewDarkTheme {
           if (tag === 'img' || tag === 'video' || tag === 'canvas' || tag === 'svg' || tag === 'path') continue;
           var st = window.getComputedStyle(el);
           if (isLightBg(st.backgroundColor)) {
-            el.style.setProperty('background-color', '#232931', 'important');
-            el.style.setProperty('background-image', 'none', 'important');
-            el.style.setProperty('background', '#232931', 'important');
+            setImportant(el, 'background-color', '#232931');
+            setImportant(el, 'background-image', 'none');
+            setImportant(el, 'background', '#232931');
           }
           if (tag !== 'input' && tag !== 'textarea' && isDarkText(st.color)) {
-            el.style.setProperty('color', '#EDEEF0', 'important');
+            setImportant(el, 'color', '#EDEEF0');
           }
         } catch (e) {}
       }
@@ -116,13 +158,14 @@ class WebViewDarkTheme {
       }
       if (s.styleSheet) { s.styleSheet.cssText = css; } else { s.innerHTML = css; }
       try {
-        document.documentElement.style.setProperty('background', '#232931', 'important');
-        document.documentElement.style.setProperty('background-color', '#232931', 'important');
-        document.documentElement.style.setProperty('color', '#EDEEF0', 'important');
+        var root = document.documentElement;
+        setImportant(root, 'background', '#232931');
+        setImportant(root, 'background-color', '#232931');
+        setImportant(root, 'color', '#EDEEF0');
         if (document.body) {
-          document.body.style.setProperty('background', '#232931', 'important');
-          document.body.style.setProperty('background-color', '#232931', 'important');
-          document.body.style.setProperty('color', '#EDEEF0', 'important');
+          setImportant(document.body, 'background', '#232931');
+          setImportant(document.body, 'background-color', '#232931');
+          setImportant(document.body, 'color', '#EDEEF0');
         }
       } catch (e) {}
       paintLightNodes();
@@ -166,8 +209,9 @@ class WebViewDarkTheme {
   static const String removeJs = r'''
 (function(){
   try {
-    var s = document.getElementById('xianbao-app-dark-style');
-    if (s && s.parentNode) s.parentNode.removeChild(s);
+    // Order matters: stop observing BEFORE touching any styles. restoreAll()
+    // writes to inline styles, which the MutationObserver watches, so leaving
+    // it connected would repaint the page back to dark immediately.
     if (window.__xianbaoDarkObs) {
       try { window.__xianbaoDarkObs.disconnect(); } catch (e) {}
       window.__xianbaoDarkObs = null;
@@ -175,6 +219,16 @@ class WebViewDarkTheme {
     if (window.__xianbaoDarkKeepAlive) {
       clearInterval(window.__xianbaoDarkKeepAlive);
       window.__xianbaoDarkKeepAlive = null;
+    }
+    var s = document.getElementById('xianbao-app-dark-style');
+    if (s && s.parentNode) s.parentNode.removeChild(s);
+
+    // Dropping the <style> element is not enough: the injector also painted
+    // inline styles onto elements, which must be reverted explicitly or the
+    // page stays dark until it is reloaded.
+    if (typeof window.__xianbaoDarkRestore === 'function') {
+      window.__xianbaoDarkRestore();
+      window.__xianbaoDarkRestore = null;
     }
     return 'light-ok';
   } catch (err) {

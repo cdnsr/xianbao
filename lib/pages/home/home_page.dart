@@ -208,7 +208,13 @@ class _HomePageState extends State<HomePage> {
         if (_articles.length > 200) {
           _articles = _articles.sublist(0, 200);
         }
-        _displayCount = _displayCount + fresh.length;
+        // Deliberately do NOT grow _displayCount here. Pushed articles are
+        // inserted at the top, so they are already inside the visible window;
+        // growing it instead would make the list creep past its page size
+        // (this site pushes ~25 articles/minute) until scrolling re-opens it.
+        if (_displayCount > _articles.length) {
+          _displayCount = _articles.length;
+        }
       });
     } catch (_) {}
   }
