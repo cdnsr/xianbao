@@ -51,6 +51,11 @@ class _HomePageState extends State<HomePage> {
   int _sessionReloadId = 0;
   bool _initialCacheApplied = false;
 
+  /// Resolved push feed path per category, cached for this page's lifetime.
+  /// A null value means the category declares no feed (the site does not
+  /// refresh it either); failures are not cached, so they retry next tick.
+  final Map<int, String?> _categoryFeedUrls = <int, String?>{};
+
   @override
   void initState() {
     super.initState();
@@ -87,6 +92,9 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _reloadForSessionChange() async {
+    // Per-category feed config can differ per account (e.g. 我的关注), so it
+    // is re-resolved after a login change.
+    _categoryFeedUrls.clear();
     if (_selectedCategory != null) {
       await _loadPage(1, force: true);
       return;
@@ -214,11 +222,11 @@ class _HomePageState extends State<HomePage> {
 
   /// Picks the refresh source for the current view.
   ///
-  /// The website polls `push_{cateId}.json` every 5s, so that is tried first.
-  /// Some categories have no usable feed there - the server answers with an
-  /// HTML error page instead of JSON, or with an empty list - so those fall
-  /// back to re-reading page 1 of the category itself. That keeps every
-  /// category in the drawer refreshing, not just the ones with a live feed.
+  /// The website auto-refreshes a category only when its own meta script
+  /// declares a push feed (`postjson.url`), so we resolve that feed instead of
+  /// assuming `push_{cateId}.json`. Categories the site does not refresh - the
+  /// drawer has 11 of them, e.g. 我的关注、公告、教程、线报库、归档 - declare no
+  /// feed and are left alone, matching the site.
   Future<List<ArticleListItem>> _fetchCandidateArticles() async {
     final category = _selectedCategory;
     if (category == null) return _api.fetchNewArticles();
@@ -229,17 +237,17 @@ class _HomePageState extends State<HomePage> {
     final cateId = _currentCateId;
     if (cateId == null) return const <ArticleListItem>[];
 
-    try {
-      final pushed = await _api.fetchCategoryNewArticles(cateId);
-      if (pushed.isNotEmpty) return pushed;
-    } catch (_) {
-      // No usable feed for this category; fall through to page 1 below.
-    }
-    final page = await _api.fetchCategoryArticleList(
-      slug: category.slug,
-      page: 1,
-    );
-    return page.items;
+    final feedUrl = await _resolveCategoryFeedUrl(cateId, category.slug);
+    if (feedUrl == null) return const <ArticleListItem>[];
+
+    return _api.fetchArticlesFromFeed(feedUrl, fallbackCateId: cateId);
+  }
+
+  Future<String?> _resolveCategoryFeedUrl(int cateId, String slug) async {
+    if (_categoryFeedUrls.containsKey(cateId)) return _categoryFeedUrls[cateId];
+    final url = await _api.fetchCategoryPushFeedUrl(cateId: cateId, slug: slug);
+    _categoryFeedUrls[cateId] = url;
+    return url;
   }
 
   void _onScroll() {

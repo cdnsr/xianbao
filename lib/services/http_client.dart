@@ -136,21 +136,44 @@ class HttpClient {
     return _decodeBytes(resp.data ?? []);
   }
 
-  /// Fetch push.json for new articles (real-time refresh).
-  Future<String> fetchPushJson() async {
+  /// Fetch the site-wide push feed for new articles (real-time refresh).
+  Future<String> fetchPushJson() => fetchPushFeed('/plus/json/push.json');
+
+  /// Fetch a push feed by its path, e.g. `/plus/json/push_30.json`.
+  /// Paths come from a category's meta script so we poll exactly the feed the
+  /// website itself polls.
+  Future<String> fetchPushFeed(String path) async {
     final resp = await dio.get<Uint8List>(
-      '/plus/json/push.json',
+      path,
       options: Options(responseType: ResponseType.bytes),
     );
     return _decodeBytes(resp.data ?? []);
   }
 
-  /// Fetch category-specific push JSON for real-time refresh on
-  /// category pages. The website uses push_{cateId}.json for this.
-  Future<String> fetchCategoryPushJson(int cateId) async {
+  /// Fetch the theme meta script for a category page.
+  ///
+  /// It carries the worker / push configuration the website uses to refresh
+  /// that category (`postjson.url`, `postjson.jiangeshijian`). Categories the
+  /// site does not auto-refresh have no such config in here.
+  Future<String> fetchCategoryMetaScript({
+    required int cateId,
+    required String slug,
+  }) async {
     final resp = await dio.get<Uint8List>(
-      '/plus/json/push_$cateId.json',
-      options: Options(responseType: ResponseType.bytes),
+      '/zb_users/theme/xianbao_theme/script/meta.php',
+      queryParameters: {
+        'type': 'category',
+        'cateid': '$cateId',
+        'catename': slug,
+        'pagination': '1',
+        '_': DateTime.now().millisecondsSinceEpoch,
+      },
+      options: Options(
+        responseType: ResponseType.bytes,
+        headers: const {
+          'Accept': 'application/javascript, text/javascript, */*',
+        },
+      ),
     );
     return _decodeBytes(resp.data ?? []);
   }

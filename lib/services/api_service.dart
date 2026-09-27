@@ -129,27 +129,47 @@ class ApiService {
     return ArticleDetail.parse(html);
   }
 
-  /// Fetch new pushed articles from push.json for real-time refresh.
+  /// Fetch new pushed articles from the site-wide push feed.
   Future<List<ArticleListItem>> fetchNewArticles() async {
     await _ensureHomeFilterRules();
-    final json = await _client.fetchPushJson();
-    final list = jsonDecode(json) as List;
-    return list
-        .map((e) => _fromPushMap(e as Map<String, dynamic>))
-        .where(_homeFilterRules.allows)
-        .toList();
+    final items = await fetchArticlesFromFeed('/plus/json/push.json');
+    return items.where(_homeFilterRules.allows).toList();
   }
 
-  /// Fetch new pushed articles for a specific category using
-  /// the category-specific push_{cateId}.json endpoint.
-  Future<List<ArticleListItem>> fetchCategoryNewArticles(int cateId) async {
-    final json = await _client.fetchCategoryPushJson(cateId);
+  /// Fetch pushed articles from a specific feed path.
+  Future<List<ArticleListItem>> fetchArticlesFromFeed(
+    String path, {
+    int? fallbackCateId,
+  }) async {
+    final json = await _client.fetchPushFeed(path);
     final list = jsonDecode(json) as List;
     return list
         .map(
-          (e) => _fromPushMap(e as Map<String, dynamic>, fallbackCateId: cateId),
+          (e) => _fromPushMap(
+            e as Map<String, dynamic>,
+            fallbackCateId: fallbackCateId,
+          ),
         )
         .toList();
+  }
+
+  /// Resolve the push feed a category's meta script declares.
+  ///
+  /// Mirrors the website, which only auto-refreshes the categories whose meta
+  /// script sets `postjson.url`. Categories without that config (我的关注、
+  /// 公告、教程、线报库、归档 …) are deliberately not refreshed there either,
+  /// so this returns null for them and callers leave them alone.
+  Future<String?> fetchCategoryPushFeedUrl({
+    required int cateId,
+    required String slug,
+  }) async {
+    final script = await _client.fetchCategoryMetaScript(
+      cateId: cateId,
+      slug: slug,
+    );
+    final match = RegExp(r'postjson\.url\s*=\s*"([^"]*)"').firstMatch(script);
+    final url = match?.group(1)?.trim() ?? '';
+    return url.isEmpty ? null : url;
   }
 
   /// Builds a list item from one push.json entry.
