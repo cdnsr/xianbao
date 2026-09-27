@@ -1,26 +1,36 @@
 # CI / 自动发版与 Android 签名
 
-## 行为摘要
+## 发版方式（tag 驱动）
+
+推送到 `main` **不再自动发版**，正式发版必须打 tag：
+
+```bash
+git tag v1.5.0
+git push origin v1.5.0
+```
 
 | 触发 | 结果 |
 |------|------|
-| `push` 到 `main`（提交说明不含 `[skip ci]`） | 自动升版本 → 签名编译 → 公开 Release |
-| 手动 `workflow_dispatch` | 同上 |
-| 仅改 `*.md` / `docs/**` | 不触发 |
-| 版本回写提交（带 `[skip ci]`） | 不触发二次构建 |
+| `push` tag（形如 `v1.5.0`） | 签名编译 → 公开 Release（挂在该 tag 上）→ 回写版本号 |
+| `push` 到 `main` | 只发代码，不编译、不发版 |
+| 手动 `workflow_dispatch` | 同上，但 ref 下拉框里必须选择已存在的 `vX.Y.Z` tag |
 
-版本策略（方案 B）：
+约束：
 
-对外版本号仅为 **versionName**（1.4.9 / 1.4.10），不含 +数字，便于客户端检测更新。
+- tag 名即版本号：`v1.5.0` → versionName `1.5.0`（必须是 `vX.Y.Z` 三位数字形式）
+- tag 必须打在 `main` 的提交上；若不在 `main` 上，Release 仍会发布，但会跳过版本号回写（job 里给出 warning）
+- 不允许降级发版：tag 版本低于 `publish/version.json` 里已发布的版本时直接失败
 
+版本策略：
 
-- 每次发版将 `pubspec.yaml` 的 **patch +1**（如 `1.4.7` → `1.4.8`）
-- `versionCode` = `max(旧值+1, github.run_number)`，保证单调递增
-- 回写仓库：`chore: bump version to x.y.z [skip ci]`（对外仅显示 x.y.z，pubspec 内部仍写 `x.y.z+code` 供 Android versionCode）
+对外版本号仅为 **versionName**（1.5.0），不含 +数字，便于客户端检测更新。
+
+- `versionCode` = `max(pubspec 旧值+1, github.run_number)`，保证单调递增
+- Release 发布后回写仓库：`chore: bump version to x.y.z [skip ci]`（pubspec 内部仍写 `x.y.z+code` 供 Android versionCode 使用）
 
 产物命名：
 
-- `xianbao-v{versionName}-armv8-release.apk`（真机推荐，如 `xianbao-v1.4.9-armv8-release.apk`）
+- `xianbao-v{versionName}-armv8-release.apk`（真机推荐，如 `xianbao-v1.5.0-armv8-release.apk`）
 - `...-armv7-release.apk`
 - `...-x86_64-release.apk`
 
@@ -83,7 +93,7 @@ flutter build apk --release --split-per-abi
 1. 四个 Secrets 已配置  
 2. 仓库已开启 Actions  
 3. `main` 保护规则如开启，需允许 `github-actions[bot]` 推送版本 commit（或关闭对 bot 的限制）  
-4. 向 `main` 推送一次业务改动，或手动 Run workflow  
+4. 在 `main` 上打一个 `vX.Y.Z` tag 并推送
 
 ---
 
@@ -95,11 +105,14 @@ flutter build apk --release --split-per-abi
 **安装提示签名冲突**  
 → 以前 debug 签名的包需先卸载，再装正式签名包。
 
-**版本 commit 导致循环构建**  
-→ 已用 `[skip ci]` + job `if` 双重防护。
+**推送 main 没有触发构建**  
+→ 预期行为。发版只认 tag，见上文「发版方式」。
 
-**tag 已存在**  
-→ 每次 patch 与 versionCode 递增，一般不会冲突；若手动删 tag 后重跑，注意勿复用相同 tag。
+**tag 已存在 / 想重新发同一个版本**  
+→ 删掉远程 tag 后重推，或在 Actions 里手动 Run workflow 并选择该 tag（版本号相同是允许的，只有降级会被拒绝）。
+
+**报错「tag 版本低于已发布的 x.y.z」**  
+→ tag 名比 `publish/version.json` 里的版本旧。改用更高的版本号。
 
 ---
 
