@@ -15,6 +15,21 @@ import 'http_client.dart';
 /// Everything is best effort: when a link cannot be resolved the caller keeps
 /// the original URL, which is never worse than not trying.
 ///
+/// Coverage is limited by what JD actually serves, so expect gaps:
+///
+///  * Single-product links resolve to `https://item.jd.com/<sku>.html`. That
+///    is roughly a third of `u.jd.com` links picked at random.
+///  * Coupon / campaign links do NOT resolve, and there is no plain product
+///    URL to recover: `u.jd.com` hops to `jingfen.jd.com/item?q=...` (领券页)
+///    or `pro.m.jd.com/mall/active/.../index.html?sku=...&q=...` (活动页),
+///    where the target sits inside the encrypted `q`. Those pages are SPA
+///    shells that fetch everything over JS, the `q` is not a simple
+///    obfuscation (single-byte and repeating-key XOR both fail to yield a
+///    URL), and nothing in the response mentions a product. Getting further
+///    would need to execute JD's JavaScript in a WebView. Posts that share
+///    coupons (新赚吧 / 好单 领券帖) are almost entirely this kind, so
+///    coverage on them is near zero rather than a third.
+///
 /// Taobao's `m.tb.cn` is deliberately NOT handled - it is not a matter of the
 /// parsing below being incomplete. Measured over 15 live links:
 ///
