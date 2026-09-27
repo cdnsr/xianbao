@@ -10,10 +10,47 @@ import '../../services/theme_controller.dart';
 import '../../utils/error_message.dart';
 import '../../widgets/article_list_tile.dart';
 import '../../widgets/load_error_view.dart';
-import '../../widgets/pagination_bar.dart';
 import '../../widgets/about_dialog.dart';
 import '../article/article_detail_page.dart';
 import '../collect/collect_list_page.dart';
+
+/// Rows revealed per top-up, and the default page size shown on first load.
+const int _itemsPerPage = 30;
+
+/// How many screens of content to keep below the viewport. Topping up this
+/// early means the list never dead-ends at the bottom.
+const double _preloadScreens = 1.5;
+
+/// What the article list should do after a scroll update.
+///
+/// [shown] is how many articles are in the list window, [fetched] how many are
+/// already in memory; the rest come from [ScrollPosition]. [reveal] is the
+/// window size to switch to (unchanged when nothing should happen), and
+/// [fetchNextPage] asks for the following page from the server.
+///
+/// The trigger sits [preloadScreens] viewports *before* the end. Waiting for
+/// the exact bottom dead-ends: the position cannot move any further, so no
+/// scroll event fires and the user has to reverse and scroll back down before
+/// anything more appears.
+({int reveal, bool fetchNextPage}) preloadForScroll({
+  required int shown,
+  required int fetched,
+  required double pixels,
+  required double maxScrollExtent,
+  required double viewportDimension,
+  int chunk = _itemsPerPage,
+  double preloadScreens = _preloadScreens,
+}) {
+  final trigger = maxScrollExtent - viewportDimension * preloadScreens;
+  if (pixels < trigger) {
+    return (reveal: shown, fetchNextPage: false);
+  }
+  if (shown < fetched) {
+    final next = shown + chunk;
+    return (reveal: next > fetched ? fetched : next, fetchNextPage: false);
+  }
+  return (reveal: shown, fetchNextPage: true);
+}
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -35,7 +72,6 @@ class _HomePageState extends State<HomePage> {
   bool _isLoadingMore = false;
   String? _error;
 
-  static const int _itemsPerPage = 30;
   int _displayCount = _itemsPerPage;
 
   CategoryItem? _selectedCategory;
@@ -255,19 +291,24 @@ class _HomePageState extends State<HomePage> {
   void _onScroll() {
     if (!_scrollController.hasClients) return;
     final pos = _scrollController.position;
-    if (pos.pixels >= pos.maxScrollExtent - 300) {
-      if (_displayCount < _articles.length) {
-        setState(() {
-          _displayCount += _itemsPerPage;
-          if (_displayCount > _articles.length) {
-            _displayCount = _articles.length;
-          }
-        });
-        return;
-      }
-      if (!_isLoadingMore && !_isLoading && _currentPage < _totalPages) {
-        _loadMore();
-      }
+    final decision = preloadForScroll(
+      shown: _displayCount,
+      fetched: _articles.length,
+      pixels: pos.pixels,
+      maxScrollExtent: pos.maxScrollExtent,
+      viewportDimension: pos.viewportDimension,
+    );
+
+    // Already-fetched articles are instant to reveal, so show those first.
+    if (decision.reveal != _displayCount) {
+      setState(() => _displayCount = decision.reveal);
+      return;
+    }
+    if (decision.fetchNextPage &&
+        !_isLoadingMore &&
+        !_isLoading &&
+        _currentPage < _totalPages) {
+      _loadMore();
     }
   }
 
@@ -367,17 +408,6 @@ class _HomePageState extends State<HomePage> {
         _expandedSlugs.add(slug);
       }
     });
-  }
-
-  void _goToPage(int page) {
-    _loadPage(page);
-    if (_scrollController.hasClients) {
-      _scrollController.animateTo(
-        0,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
-      );
-    }
   }
 
   @override
@@ -627,7 +657,11 @@ class _HomePageState extends State<HomePage> {
     }
 
     final displayItems = _articles.take(_displayCount).toList();
-    final itemCount = displayItems.length + 2;
+    // One trailing slot: a spinner while the next page loads, or the end note.
+    // The pagination bar is gone - scrolling is the only way to load more.
+    final itemCount = displayItems.length + 1;
+    final reachedEnd =
+        _displayCount >= _articles.length && _currentPage >= _totalPages;
 
     return ColoredBox(
       // The list module sits on the page background, like `.sb` on the site.
@@ -639,24 +673,13 @@ class _HomePageState extends State<HomePage> {
           itemCount: itemCount,
           itemBuilder: (context, index) {
             if (index == itemCount - 1) {
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: PaginationBar(
-                  currentPage: _currentPage,
-                  totalPages: _totalPages,
-                  onPageChanged: _goToPage,
-                ),
-              );
-            }
-            if (index == itemCount - 2) {
               if (_isLoadingMore) {
                 return const Padding(
                   padding: EdgeInsets.all(16),
                   child: Center(child: CircularProgressIndicator()),
                 );
               }
-              if (_displayCount >= _articles.length &&
-                  _currentPage >= _totalPages) {
+              if (reachedEnd) {
                 return Padding(
                   padding: const EdgeInsets.all(16),
                   child: Center(
@@ -667,7 +690,9 @@ class _HomePageState extends State<HomePage> {
                   ),
                 );
               }
-              return const SizedBox.shrink();
+              // Keeps the last row off the bottom edge while the next chunk
+              // is on its way.
+              return const SizedBox(height: 12);
             }
             final article = displayItems[index];
             return ArticleListTile(
