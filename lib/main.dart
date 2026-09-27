@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'services/app_state.dart';
 import 'services/home_cache_service.dart';
 import 'services/theme_controller.dart';
+import 'services/union_link_service.dart';
 import 'theme/app_theme.dart';
 import 'pages/main_shell.dart';
 
@@ -58,6 +59,7 @@ Future<void> main() async {
   final initialHomeCache = await HomeCacheService().load();
   final themeController = ThemeController();
   await themeController.load();
+  await UnionLinkService.instance.load();
   runApp(
     MultiProvider(
       providers: [

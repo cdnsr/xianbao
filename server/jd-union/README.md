@@ -1,0 +1,69 @@
+# 京东联盟转链服务
+
+把京东商品链接换成**你自己联盟账号**的推广链。App 侧默认关闭，配置了这里的地址之后才会生效。
+
+```
+App  ──商品链接──▶  本服务  ──签名请求──▶  京东联盟开放平台
+      ◀──推广链────          ◀──clickURL───
+```
+
+## 为什么要自己部署
+
+签名需要 `appSecret`。它**不能放进 APK** —— 反编译拿到就能冒充你的账号刷你的额度。所以换链必须放在一个你能控制的地方，App 只拿到一个地址和口令。
+
+## 1. 拿到联盟凭据
+
+在 [京东联盟开放平台](https://union.jd.com/) 申请开发者，创建应用后得到：
+
+| 值 | 用途 | 在本服务里的变量名 |
+|---|---|---|
+| `appKey` | 应用标识 | `JD_APP_KEY` |
+| `appSecret` | 签名密钥 | `JD_APP_SECRET` |
+| 推广位 / 网站 ID | 归因到哪个位置 | `JD_SITE_ID` |
+| 子联盟 ID（可选） | 细分渠道标识 | `JD_SUB_UNION_ID` |
+| positionId（可选） | 推广位 ID | `JD_POSITION_ID` |
+
+## 2. 部署到 Cloudflare Workers
+
+```bash
+cd server/jd-union
+npx wrangler login
+npx wrangler secret put JD_APP_KEY
+npx wrangler secret put JD_APP_SECRET
+npx wrangler secret put JD_SITE_ID
+npx wrangler secret put APP_TOKEN      # 自己定一个口令，防止别人白用你的额度
+npx wrangler deploy
+```
+
+部署完会得到一个 `https://xxxx.workers.dev` 地址。
+
+想部署在自己的 VPS 上也行：`index.js` 用的是标准 `fetch` / `Request` / `Response`，Node 18+ 直接能跑，套个 `http` 适配层即可。
+
+## 3. 先用手测确认能换链
+
+```bash
+curl -s "https://xxxx.workers.dev/?token=你的APP_TOKEN&url=https://item.jd.com/100288670988.html"
+# 成功：{"url":"https://u.jd.com/xxxx"}
+# 失败：{"error":"...","raw":"<京东原始返回>"}
+```
+
+失败时加 `&debug=1` 会回显实际用的网关、方法名和 materialId，方便和京东文档对照。
+
+## 4. 填进 App
+
+App → 首页左上角菜单 → **京东转链**，填服务地址和口令。
+
+## 5. 自测脚本
+
+```bash
+node test.mjs
+```
+
+覆盖 MD5（对拍 Node `crypto`，含多分组、长度边界、UTF-8）、签名拼接、鉴权、参数形状、以及几种京东响应结构的解析。**它不校验京东接口本身** —— 接口名和字段以京东文档为准，见下。
+
+## 已知不确定点
+
+- **接口名 / 字段**：默认用 `jd.union.open.promotion.bysubunionid.get` + `promotionCodeReq`。京东改过几版，如果报签名错或参数错，用 `?debug=1` 看实际请求再对照文档调整 `METHOD` / 请求体。
+- **归因是否生效**：本服务只负责换一条合法的推广链。佣金有没有记到你名下，**必须用一笔小额订单在自己的联盟后台确认** —— 这个我无法替你验证。
+- **覆盖率**：只有能从短链还原出商品页的链接才换得了（随机抽样约三分之一）。领券/活动类短链的目标是加密的，拆不出来，详见 `lib/services/short_link_resolver.dart` 的类注释。
+- 每换一条链都会消耗你的联盟接口调用额度，所以 `APP_TOKEN` 建议一定设置。

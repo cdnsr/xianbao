@@ -11,6 +11,7 @@ import '../../utils/error_message.dart';
 import '../../widgets/article_list_tile.dart';
 import '../../widgets/load_error_view.dart';
 import '../../widgets/about_dialog.dart';
+import '../../widgets/union_settings_dialog.dart';
 import '../article/article_detail_page.dart';
 import '../collect/collect_list_page.dart';
 
@@ -490,6 +491,14 @@ class _HomePageState extends State<HomePage> {
                     : const Center(child: CircularProgressIndicator()),
               ),
               const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.link),
+                title: const Text('京东转链'),
+                onTap: () {
+                  Navigator.of(context).pop(); // close drawer
+                  showUnionSettingsDialog(context);
+                },
+              ),
               ListTile(
                 leading: const Icon(Icons.info_outline),
                 title: const Text('关于'),
