@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import '../../services/app_state.dart';
 import '../../utils/cookie_bridge.dart';
+import '../../utils/error_message.dart';
 import '../../utils/webview_dark_theme.dart';
+import '../../widgets/load_error_view.dart';
 
 /// Login page using WebView, as login requires captcha and JS.
 /// After successful login, syncs cookies back to Dio.
@@ -24,6 +26,13 @@ class _LoginPageState extends State<LoginPage> {
   bool? _lastDark;
   final List<Timer> _themeRetryTimers = <Timer>[];
   final List<Timer> _uiTweakRetryTimers = <Timer>[];
+
+  /// Non-null when the WebView's main frame failed to load; the friendly
+  /// message replaces the platform's raw error page until the user retries.
+  String? _loadError;
+
+  static final Uri _loginUrl =
+      Uri.parse('https://new.xianbao.fun/login.html');
 
   static const Color _darkBg = Color(WebViewDarkTheme.darkBgArgb);
   static const Color _lightBg = Color(WebViewDarkTheme.lightBgArgb);
@@ -270,6 +279,13 @@ class _LoginPageState extends State<LoginPage> {
             }
             unawaited(_applyLoginUiTweaks(scheduleRetries: true));
           },
+          onWebResourceError: (error) {
+            if (!mounted || _loginHandled) return;
+            // Only main-frame failures should replace the page; a failed image
+            // or script must not blank the login form.
+            if (error.isForMainFrame != true) return;
+            setState(() => _loadError = friendlyWebViewErrorMessage(error));
+          },
         ),
       );
 
@@ -279,11 +295,18 @@ class _LoginPageState extends State<LoginPage> {
       final isDark = Theme.of(context).brightness == Brightness.dark;
       await _controller.setBackgroundColor(isDark ? _darkBg : _lightBg);
       _lastDark = isDark;
-      await _controller.loadRequest(
-        Uri.parse('https://new.xianbao.fun/login.html'),
-      );
+      await _controller.loadRequest(_loginUrl);
       setState(() => _loaded = true);
     });
+  }
+
+  Future<void> _retryLoad() async {
+    setState(() => _loadError = null);
+    try {
+      await _controller.loadRequest(_loginUrl);
+    } catch (e) {
+      debugPrint('login retry load failed: $e');
+    }
   }
 
   void _clearThemeRetries() {
@@ -356,7 +379,8 @@ class _LoginPageState extends State<LoginPage> {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     return Scaffold(
       backgroundColor: isDark ? _darkBg : null,
       appBar: AppBar(
@@ -366,9 +390,25 @@ class _LoginPageState extends State<LoginPage> {
       ),
       body: !_loaded
           ? const Center(child: CircularProgressIndicator())
-          : ColoredBox(
-              color: isDark ? _darkBg : _lightBg,
-              child: WebViewWidget(controller: _controller),
+          : Stack(
+              children: [
+                ColoredBox(
+                  color: isDark ? _darkBg : _lightBg,
+                  child: WebViewWidget(controller: _controller),
+                ),
+                // Keep the WebView mounted underneath so retry only has to
+                // reload it rather than rebuild the platform view.
+                if (_loadError != null)
+                  Positioned.fill(
+                    child: ColoredBox(
+                      color: theme.scaffoldBackgroundColor,
+                      child: LoadErrorView(
+                        message: _loadError!,
+                        onRetry: _retryLoad,
+                      ),
+                    ),
+                  ),
+              ],
             ),
     );
   }

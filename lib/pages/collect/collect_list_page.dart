@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../../models/article.dart';
 import '../../services/api_service.dart';
+import '../../utils/error_message.dart';
+import '../../widgets/load_error_view.dart';
 import '../article/article_detail_page.dart';
 
 /// User collect list page (native list of 收藏管理).
@@ -64,7 +66,7 @@ class _CollectListPageState extends State<CollectListPage> {
       setState(() {
         _loading = false;
         _loadingMore = false;
-        _error = e.toString();
+        _error = friendlyErrorMessage(e);
       });
     }
   }
@@ -145,21 +147,9 @@ class _CollectListPageState extends State<CollectListPage> {
       return const Center(child: CircularProgressIndicator());
     }
     if (_error != null && _items.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(_error!, textAlign: TextAlign.center),
-              const SizedBox(height: 16),
-              FilledButton(
-                onPressed: () => _load(reset: true),
-                child: const Text('重试'),
-              ),
-            ],
-          ),
-        ),
+      return LoadErrorView(
+        message: _error!,
+        onRetry: () => _load(reset: true),
       );
     }
     if (_items.isEmpty) {

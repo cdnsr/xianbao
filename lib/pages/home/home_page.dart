@@ -7,7 +7,9 @@ import '../../services/api_service.dart';
 import '../../services/app_state.dart';
 import '../../services/home_cache_service.dart';
 import '../../services/theme_controller.dart';
+import '../../utils/error_message.dart';
 import '../../widgets/article_list_tile.dart';
+import '../../widgets/load_error_view.dart';
 import '../../widgets/pagination_bar.dart';
 import '../../widgets/about_dialog.dart';
 import '../article/article_detail_page.dart';
@@ -137,7 +139,7 @@ class _HomePageState extends State<HomePage> {
       if (mounted && reloadId == _sessionReloadId) {
         setState(() {
           _isLoading = false;
-          if (_articles.isEmpty) _error = e.toString();
+          if (_articles.isEmpty) _error = friendlyErrorMessage(e);
         });
       }
     }
@@ -311,7 +313,7 @@ class _HomePageState extends State<HomePage> {
       if (!mounted || requestId != _loadRequestId) return;
       setState(() {
         _isLoading = false;
-        _error = e.toString();
+        _error = friendlyErrorMessage(e);
       });
     }
   }
@@ -601,28 +603,9 @@ class _HomePageState extends State<HomePage> {
     }
 
     if (_error != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 32),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.error_outline, size: 48,
-                  color: theme.colorScheme.error),
-              const SizedBox(height: 16),
-              SelectableText(
-                _error!,
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 24),
-              FilledButton(
-                onPressed: () => _loadPage(1),
-                child: const Text('重试'),
-              ),
-            ],
-          ),
-        ),
+      return LoadErrorView(
+        message: _error!,
+        onRetry: () => _loadPage(1),
       );
     }
 

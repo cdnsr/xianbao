@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import '../../services/app_state.dart';
 import '../../utils/cookie_bridge.dart';
+import '../../utils/error_message.dart';
 import '../../utils/webview_dark_theme.dart';
+import '../../widgets/load_error_view.dart';
 
 /// User center page using WebView (after login).
 class ProfilePage extends StatefulWidget {
@@ -18,10 +20,15 @@ class ProfilePage extends StatefulWidget {
 
 class _ProfilePageState extends State<ProfilePage> {
   late final WebViewController _controller;
+  late final Uri _targetUrl;
   bool _loaded = false;
   bool _loggingOut = false;
   bool? _lastDark;
   final List<Timer> _themeRetryTimers = <Timer>[];
+
+  /// Non-null when the WebView's main frame failed to load; the friendly
+  /// message replaces the platform's raw error page until the user retries.
+  String? _loadError;
 
   static const Color _darkBg = Color(WebViewDarkTheme.darkBgArgb);
   static const Color _lightBg = Color(WebViewDarkTheme.lightBgArgb);
@@ -77,21 +84,40 @@ class _ProfilePageState extends State<ProfilePage> {
               unawaited(_applyThemeToWebView(true, scheduleRetries: true));
             }
           },
+          onWebResourceError: (error) {
+            if (!mounted || _loggingOut) return;
+            // Only main-frame failures should replace the page; a failed image
+            // or script must not blank the user center.
+            if (error.isForMainFrame != true) return;
+            setState(() => _loadError = friendlyWebViewErrorMessage(error));
+          },
         ),
       );
+
+    // Prefer Ucenter when already logged in so user center content loads directly.
+    _targetUrl = Uri.parse(
+      widget.appState.isLoggedIn
+          ? 'https://new.xianbao.fun/Ucenter'
+          : 'https://new.xianbao.fun/login.html',
+    );
 
     CookieBridge.syncToWebView().then((_) async {
       if (!mounted) return;
       final isDark = Theme.of(context).brightness == Brightness.dark;
       await _controller.setBackgroundColor(isDark ? _darkBg : _lightBg);
       _lastDark = isDark;
-      // Prefer Ucenter when already logged in so user center content loads directly.
-      final url = widget.appState.isLoggedIn
-          ? 'https://new.xianbao.fun/Ucenter'
-          : 'https://new.xianbao.fun/login.html';
-      await _controller.loadRequest(Uri.parse(url));
+      await _controller.loadRequest(_targetUrl);
       setState(() => _loaded = true);
     });
+  }
+
+  Future<void> _retryLoad() async {
+    setState(() => _loadError = null);
+    try {
+      await _controller.loadRequest(_targetUrl);
+    } catch (e) {
+      debugPrint('profile retry load failed: $e');
+    }
   }
 
   void _clearThemeRetries() {
@@ -134,7 +160,8 @@ class _ProfilePageState extends State<ProfilePage> {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     return Scaffold(
       backgroundColor: isDark ? _darkBg : null,
       appBar: AppBar(
@@ -160,9 +187,25 @@ class _ProfilePageState extends State<ProfilePage> {
       ),
       body: !_loaded
           ? const Center(child: CircularProgressIndicator())
-          : ColoredBox(
-              color: isDark ? _darkBg : _lightBg,
-              child: WebViewWidget(controller: _controller),
+          : Stack(
+              children: [
+                ColoredBox(
+                  color: isDark ? _darkBg : _lightBg,
+                  child: WebViewWidget(controller: _controller),
+                ),
+                // Keep the WebView mounted underneath so retry only has to
+                // reload it rather than rebuild the platform view.
+                if (_loadError != null)
+                  Positioned.fill(
+                    child: ColoredBox(
+                      color: theme.scaffoldBackgroundColor,
+                      child: LoadErrorView(
+                        message: _loadError!,
+                        onRetry: _retryLoad,
+                      ),
+                    ),
+                  ),
+              ],
             ),
     );
   }

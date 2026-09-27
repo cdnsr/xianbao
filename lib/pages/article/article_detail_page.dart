@@ -5,9 +5,11 @@ import 'package:provider/provider.dart';
 import '../../models/article.dart';
 import '../../services/api_service.dart';
 import '../../services/app_state.dart';
+import '../../utils/error_message.dart';
 import '../../utils/html_utils.dart';
 import '../../widgets/article_content_view.dart';
 import '../../widgets/comment_list.dart';
+import '../../widgets/load_error_view.dart';
 
 class ArticleDetailPage extends StatefulWidget {
   final ArticleListItem article;
@@ -58,7 +60,7 @@ class _ArticleDetailPageState extends State<ArticleDetailPage> {
       if (!mounted) return;
       setState(() {
         _isLoading = false;
-        _error = '加载失败: $e';
+        _error = friendlyErrorMessage(e);
       });
     }
   }
@@ -178,19 +180,7 @@ class _ArticleDetailPageState extends State<ArticleDetailPage> {
       return const Center(child: CircularProgressIndicator());
     }
     if (_error != null) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(_error!, style: theme.textTheme.bodyLarge),
-            const SizedBox(height: 16),
-            FilledButton(
-              onPressed: _loadDetail,
-              child: const Text('重试'),
-            ),
-          ],
-        ),
-      );
+      return LoadErrorView(message: _error!, onRetry: _loadDetail);
     }
     final detail = _detail;
     if (detail == null) {

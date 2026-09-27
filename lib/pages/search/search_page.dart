@@ -1,6 +1,8 @@
 ﻿import 'package:flutter/material.dart';
 import '../../models/article.dart';
 import '../../services/api_service.dart';
+import '../../utils/error_message.dart';
+import '../../widgets/load_error_view.dart';
 import '../../widgets/article_list_tile.dart';
 import '../article/article_detail_page.dart';
 
@@ -42,7 +44,7 @@ class _SearchPageState extends State<SearchPage> {
     } catch (e) {
       setState(() {
         _isSearching = false;
-        _error = '搜索失败: $e';
+        _error = friendlyErrorMessage(e);
       });
     }
   }
@@ -80,19 +82,7 @@ class _SearchPageState extends State<SearchPage> {
       return const Center(child: CircularProgressIndicator());
     }
     if (_error != null) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(_error!, style: theme.textTheme.bodyLarge),
-            const SizedBox(height: 16),
-            FilledButton(
-              onPressed: _doSearch,
-              child: const Text('重试'),
-            ),
-          ],
-        ),
-      );
+      return LoadErrorView(message: _error!, onRetry: _doSearch);
     }
     if (!_hasSearched) {
       return Center(
