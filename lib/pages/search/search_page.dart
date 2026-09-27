@@ -1,7 +1,7 @@
 ﻿import 'package:flutter/material.dart';
 import '../../models/article.dart';
 import '../../services/api_service.dart';
-import '../../widgets/article_card.dart';
+import '../../widgets/article_list_tile.dart';
 import '../article/article_detail_page.dart';
 
 class SearchPage extends StatefulWidget {
@@ -123,23 +123,27 @@ class _SearchPageState extends State<SearchPage> {
         ),
       );
     }
-    return ListView.builder(
-      itemCount: _results.length,
-      itemBuilder: (context, index) {
-        final article = _results[index];
-        return ArticleCard(
-          article: article,
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) =>
-                    ArticleDetailPage(article: article),
-              ),
-            );
-          },
-        );
-      },
+    return ColoredBox(
+      color: theme.colorScheme.surface,
+      child: ListView.builder(
+        itemCount: _results.length,
+        itemBuilder: (context, index) {
+          final article = _results[index];
+          return ArticleListTile(
+            article: article,
+            showDivider: index != _results.length - 1,
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) =>
+                      ArticleDetailPage(article: article),
+                ),
+              );
+            },
+          );
+        },
+      ),
     );
   }
 }

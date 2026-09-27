@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'services/app_state.dart';
 import 'services/home_cache_service.dart';
+import 'services/theme_controller.dart';
+import 'theme/app_theme.dart';
 import 'pages/main_shell.dart';
 
 Future<void> main() async {
@@ -53,9 +55,16 @@ Future<void> main() async {
     return true;
   };
   final initialHomeCache = await HomeCacheService().load();
+  final themeController = ThemeController();
+  await themeController.load();
   runApp(
-    ChangeNotifierProvider(
-      create: (_) => AppState(initialHomeCache: initialHomeCache),
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(
+          create: (_) => AppState(initialHomeCache: initialHomeCache),
+        ),
+        ChangeNotifierProvider.value(value: themeController),
+      ],
       child: const XianbaoApp(),
     ),
   );
@@ -66,28 +75,13 @@ class XianbaoApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final themeMode = context.watch<ThemeController>().mode;
     return MaterialApp(
       title: '线报酷',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.red,
-          brightness: Brightness.light,
-        ),
-        useMaterial3: true,
-        appBarTheme: const AppBarTheme(centerTitle: true),
-        cardTheme: CardThemeData(elevation: 1, margin: EdgeInsets.zero),
-      ),
-      darkTheme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.red,
-          brightness: Brightness.dark,
-        ),
-        useMaterial3: true,
-        appBarTheme: const AppBarTheme(centerTitle: true),
-        cardTheme: CardThemeData(elevation: 1, margin: EdgeInsets.zero),
-      ),
-      themeMode: ThemeMode.system,
+      theme: AppTheme.light(),
+      darkTheme: AppTheme.dark(),
+      themeMode: themeMode,
       home: const MainShell(),
     );
   }

@@ -50,13 +50,14 @@ class PaginationBar extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(
                       horizontal: 12, vertical: 4),
                   decoration: BoxDecoration(
-                    color: theme.colorScheme.primaryContainer,
+                    // `.page-numbers {background-color:var(--c-primary);color:#fff}`
+                    color: theme.colorScheme.primary,
                     borderRadius: BorderRadius.circular(16),
                   ),
                   child: Text(
                     '$currentPage / $totalPages',
                     style: theme.textTheme.labelMedium?.copyWith(
-                      color: theme.colorScheme.onPrimaryContainer,
+                      color: theme.colorScheme.onPrimary,
                       fontWeight: FontWeight.w600,
                     ),
                   ),

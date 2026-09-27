@@ -6,7 +6,8 @@ import '../../models/category.dart';
 import '../../services/api_service.dart';
 import '../../services/app_state.dart';
 import '../../services/home_cache_service.dart';
-import '../../widgets/article_card.dart';
+import '../../services/theme_controller.dart';
+import '../../widgets/article_list_tile.dart';
 import '../../widgets/pagination_bar.dart';
 import '../../widgets/about_dialog.dart';
 import '../article/article_detail_page.dart';
@@ -351,8 +352,6 @@ class _HomePageState extends State<HomePage> {
           _selectedCategory?.name ?? '线报酷',
           style: const TextStyle(fontSize: 16),
         ),
-        centerTitle: true,
-        toolbarHeight: 44,
         leading: IconButton(
           icon: const Icon(Icons.menu),
           onPressed: () => _scaffoldKey.currentState?.openDrawer(),
@@ -371,6 +370,9 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildDrawer(ThemeData theme) {
+    final themeController = context.watch<ThemeController>();
+    final isDark = theme.brightness == Brightness.dark;
+
     return SizedBox(
       width: 240,
       child: Drawer(
@@ -379,16 +381,34 @@ class _HomePageState extends State<HomePage> {
             children: [
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.fromLTRB(16, 20, 16, 12),
+                padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
                 decoration: BoxDecoration(
                   color: theme.colorScheme.primaryContainer,
                 ),
-                child: Text(
-                  '分类',
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    color: theme.colorScheme.onPrimaryContainer,
-                    fontWeight: FontWeight.bold,
-                  ),
+                child: Row(
+                  children: [
+                    Text(
+                      '分类',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        color: theme.colorScheme.onPrimaryContainer,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const Spacer(),
+                    // Day/night toggle, same row as the 分类 title.
+                    IconButton(
+                      icon: Icon(
+                        isDark
+                            ? Icons.light_mode_outlined
+                            : Icons.dark_mode_outlined,
+                      ),
+                      color: theme.colorScheme.onPrimaryContainer,
+                      tooltip: isDark ? '切换到日间模式' : '切换到夜间模式',
+                      onPressed: () => themeController.toggle(
+                        theme.brightness,
+                      ),
+                    ),
+                  ],
                 ),
               ),
               Expanded(
@@ -589,56 +609,61 @@ class _HomePageState extends State<HomePage> {
     final displayItems = _articles.take(_displayCount).toList();
     final itemCount = displayItems.length + 2;
 
-    return RefreshIndicator(
-      onRefresh: _refresh,
-      child: ListView.builder(
-        controller: _scrollController,
-        itemCount: itemCount,
-        itemBuilder: (context, index) {
-          if (index == itemCount - 1) {
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: PaginationBar(
-                currentPage: _currentPage,
-                totalPages: _totalPages,
-                onPageChanged: _goToPage,
-              ),
-            );
-          }
-          if (index == itemCount - 2) {
-            if (_isLoadingMore) {
-              return const Padding(
-                padding: EdgeInsets.all(16),
-                child: Center(child: CircularProgressIndicator()),
-              );
-            }
-            if (_displayCount >= _articles.length &&
-                _currentPage >= _totalPages) {
+    return ColoredBox(
+      // The list module sits on the page background, like `.sb` on the site.
+      color: theme.colorScheme.surface,
+      child: RefreshIndicator(
+        onRefresh: _refresh,
+        child: ListView.builder(
+          controller: _scrollController,
+          itemCount: itemCount,
+          itemBuilder: (context, index) {
+            if (index == itemCount - 1) {
               return Padding(
-                padding: const EdgeInsets.all(16),
-                child: Center(
-                  child: Text(
-                    '没有更多了',
-                    style: theme.textTheme.bodySmall,
-                  ),
+                padding: const EdgeInsets.only(bottom: 8),
+                child: PaginationBar(
+                  currentPage: _currentPage,
+                  totalPages: _totalPages,
+                  onPageChanged: _goToPage,
                 ),
               );
             }
-            return const SizedBox.shrink();
-          }
-          final article = displayItems[index];
-          return ArticleCard(
-            article: article,
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => ArticleDetailPage(article: article),
-                ),
-              );
-            },
-          );
-        },
+            if (index == itemCount - 2) {
+              if (_isLoadingMore) {
+                return const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Center(child: CircularProgressIndicator()),
+                );
+              }
+              if (_displayCount >= _articles.length &&
+                  _currentPage >= _totalPages) {
+                return Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Center(
+                    child: Text(
+                      '没有更多了',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ),
+                );
+              }
+              return const SizedBox.shrink();
+            }
+            final article = displayItems[index];
+            return ArticleListTile(
+              article: article,
+              showDivider: index != displayItems.length - 1,
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => ArticleDetailPage(article: article),
+                  ),
+                );
+              },
+            );
+          },
+        ),
       ),
     );
   }

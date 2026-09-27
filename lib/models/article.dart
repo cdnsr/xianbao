@@ -13,6 +13,10 @@ class ArticleListItem {
   final String author;
   final Object? authorRegistrationTime;
 
+  /// Category icon class from the site markup, e.g. `cg30` / `cg10-tb`.
+  /// Empty when the source did not provide one.
+  final String figureClass;
+
   ArticleListItem({
     required this.url,
     required this.title,
@@ -23,9 +27,14 @@ class ArticleListItem {
     required this.time,
     required this.author,
     this.authorRegistrationTime,
+    this.figureClass = '',
   });
 
   String get path => url;
+
+  /// Bundled asset for [figureClass], or null when the site has no icon for
+  /// this category (a few of its own image URLs are 404 upstream).
+  String? get figureAsset => figureAssetFor(figureClass);
 
   /// Numeric article id from URL path, e.g. `/zuankeba/6640760.html` -> 6640760.
   int? get articleId => extractArticleId(url);
@@ -35,6 +44,32 @@ class ArticleListItem {
     if (match == null) return null;
     return int.tryParse(match.group(1)!);
   }
+
+  /// Maps a site `figure` class to a bundled category icon.
+  ///
+  /// Mirrors the `.article-list .cgN {background-image:url(cateicon/N.png)}`
+  /// rules: `cg10-tb` -> `10-tb.png`, and the aliases `cg26`/`cg29` -> `2.png`.
+  static String? figureAssetFor(String figureClass) {
+    final cls = figureClass.trim();
+    if (!cls.startsWith('cg')) return null;
+    final name = _figureAssetAliases[cls.substring(2)] ?? cls.substring(2);
+    if (!_figureAssets.contains(name)) return null;
+    return 'assets/cateicon/$name.png';
+  }
+
+  /// `cg2`, `cg26` and `cg29` all render `2.png` on the website.
+  static const Map<String, String> _figureAssetAliases = {
+    '26': '2',
+    '29': '2',
+  };
+
+  /// Icons bundled under assets/cateicon (downloaded from the site).
+  static const Set<String> _figureAssets = {
+    '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13',
+    '14', '16', '17', '18', '19', '20', '22', '23', '24', '25', '27', '28',
+    '30', '31', '10-jd', '10-other', '10-pdd', '10-tb', '10-tb_jd',
+    '10-tuan', 'wx',
+  };
 
   Map<String, Object?> toJson() => {
     'url': url,
@@ -46,6 +81,7 @@ class ArticleListItem {
     'time': time,
     'author': author,
     'authorRegistrationTime': authorRegistrationTime,
+    'figureClass': figureClass,
   };
 
   factory ArticleListItem.fromJson(Map<String, dynamic> json) {
@@ -59,6 +95,7 @@ class ArticleListItem {
       time: json['time'] as String? ?? '',
       author: json['author'] as String? ?? '',
       authorRegistrationTime: json['authorRegistrationTime'],
+      figureClass: json['figureClass'] as String? ?? '',
     );
   }
 
@@ -83,10 +120,20 @@ class ArticleListItem {
           time: timeEl?.attributes['title'] ?? '',
           author: a.attributes['data-louzhu'] ?? '',
           authorRegistrationTime: a.attributes['data-louzhuregtime'],
+          figureClass: _parseFigureClass(li.querySelector('span.figure')),
         ),
       );
     }
     return items;
+  }
+
+  /// Extracts the `cg*` token from `span.figure.cg30`.
+  static String _parseFigureClass(dom.Element? figure) {
+    if (figure == null) return '';
+    for (final cls in (figure.attributes['class'] ?? '').split(' ')) {
+      if (cls.startsWith('cg')) return cls;
+    }
+    return '';
   }
 
   /// Parse total page count from pagebar in HTML.

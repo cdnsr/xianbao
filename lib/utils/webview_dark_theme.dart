@@ -1,9 +1,12 @@
 /// Shared dark-mode injection for site WebViews (login + user center).
+///
+/// Colors mirror the website's own 夜间模式 palette (`.night` rules in
+/// style.css) and the app's [AppPalette.dark] tokens.
 class WebViewDarkTheme {
   WebViewDarkTheme._();
 
-  static const ColorValue darkBgArgb = 0xFF1C1B1F;
-  static const ColorValue lightBgArgb = 0xFFFFFBFE;
+  static const ColorValue darkBgArgb = 0xFF232931;
+  static const ColorValue lightBgArgb = 0xFFFFFFFF;
 
   /// ES5-only injector: CSS overrides + light-node painter + MutationObserver.
   static const String injectJs = r'''
@@ -11,13 +14,13 @@ class WebViewDarkTheme {
   try {
     var STYLE_ID = 'xianbao-app-dark-style';
     var css = ''
-      + 'html,body{background:#1C1B1F !important;background-color:#1C1B1F !important;color:#E6E1E5 !important;}'
+      + 'html,body{background:#232931 !important;background-color:#232931 !important;color:#EDEEF0 !important;}'
       + 'html{color-scheme:dark !important;}'
-      + '*,*::before,*::after{border-color:#49454F !important;box-shadow:none !important;}'
+      + '*,*::before,*::after{border-color:#39444F !important;box-shadow:none !important;}'
       + 'body,div,section,article,main,aside,header,footer,nav,ul,ol,li,table,thead,tbody,tr,td,th,'
       + 'p,span,label,h1,h2,h3,h4,h5,h6,form,fieldset,legend,dl,dt,dd,a{'
-      + 'color:#E6E1E5 !important;}'
-      + 'a,a:link,a:visited,a:hover{color:#FFB4AB !important;}'
+      + 'color:#EDEEF0 !important;}'
+      + 'a,a:link,a:visited,a:hover{color:#B4C2E1 !important;}'
       /* layui admin / user center */
       + '.layui-layout-admin,.layui-layout-body,#LAY_app,#LAY_app_body,.layadmin-tabsbody-item,'
       + '.layui-body,.layui-side,.layui-side-scroll,.layui-header,.layui-footer,.layui-fluid,'
@@ -27,36 +30,36 @@ class WebViewDarkTheme {
       + '.layui-table-body,.layui-table-tool,.layui-elem-quote,.layui-bg-white,.layui-bg-gray,'
       + '.layadmin-pagetabs,.layui-show,.layui-layer-content,.layui-layer,.layui-m-layer,'
       + '.mochu,.ucenter,.content,.main,.box,.wrapper,.container,.panel,.card{'
-      + 'background:#141218 !important;background-color:#141218 !important;color:#E6E1E5 !important;}'
+      + 'background:#2B333E !important;background-color:#2B333E !important;color:#EDEEF0 !important;}'
       + '.layui-layout-admin .layui-header,.layui-bg-black,.layui-nav-tree{'
-      + 'background:#141218 !important;background-color:#141218 !important;}'
+      + 'background:#2B333E !important;background-color:#2B333E !important;}'
       + '.layui-nav .layui-nav-item a,.layui-nav-tree .layui-nav-item a,'
-      + '.layui-nav-tree .layui-nav-child a{color:#E6E1E5 !important;background:transparent !important;}'
+      + '.layui-nav-tree .layui-nav-child a{color:#EDEEF0 !important;background:transparent !important;}'
       + '.layui-nav-tree .layui-this,.layui-nav-tree .layui-this>a,'
       + '.layui-nav-tree .layui-nav-child dd.layui-this,'
       + '.layui-nav-tree .layui-nav-child dd.layui-this a,'
-      + '.layui-this,.layui-this>a{background:#8C1D18 !important;background-color:#8C1D18 !important;color:#FFDAD6 !important;}'
+      + '.layui-this,.layui-this>a{background:#0D71E3 !important;background-color:#0D71E3 !important;color:#FFFFFF !important;}'
       /* login page (layadmin-user-login) */
       + '#LAY-user-login,.layadmin-user-login,.layadmin-user-login-main,'
       + '.layadmin-user-login-box,.layadmin-user-login-header,.layadmin-user-login-body,'
       + '#loginretbody,#wechathtml,.login-tip,.login-tipdiv,.poptip,.poptip-content,'
       + '.poptip-arrow,.layadmin-user-display-show{'
-      + 'background:#1C1B1F !important;background-color:#1C1B1F !important;background-image:none !important;color:#E6E1E5 !important;}'
+      + 'background:#232931 !important;background-color:#232931 !important;background-image:none !important;color:#EDEEF0 !important;}'
       + '.layadmin-user-login-main:before,#loginretbody:before,.layadmin-user-login:before{'
       + 'background:none !important;background-image:none !important;opacity:0 !important;content:none !important;}'
       + '.layadmin-user-login-header h2,.layadmin-user-login-header h3,.layadmin-user-login-header p,'
-      + '.poptip-content,.login-tip,.layadmin-user-jump-change,.layadmin-link{color:#E6E1E5 !important;}'
-      + '.layadmin-user-login-icon,.layui-icon.poptip-i{color:#CAC4D0 !important;}'
+      + '.poptip-content,.login-tip,.layadmin-user-jump-change,.layadmin-link{color:#EDEEF0 !important;}'
+      + '.layadmin-user-login-icon,.layui-icon.poptip-i{color:#737A8A !important;}'
       + 'input,textarea,select,button,.layui-input,.layui-textarea,.layui-select,'
       + '.layui-form-select,.layui-form-select dl,.layui-form-select dl dd,'
       + '.layui-btn,.layui-btn-primary,.layui-btn-normal,'
       + '#username,#password,#vercode{'
-      + 'background:#2B2930 !important;background-color:#2B2930 !important;color:#E6E1E5 !important;border-color:#49454F !important;}'
+      + 'background:#1E232B !important;background-color:#1E232B !important;color:#EDEEF0 !important;border-color:#39444F !important;}'
       + '.layui-btn-normal,.layui-btn-danger,.layui-btn-fluid,'
-      + 'button[lay-filter],.layui-btn-primary.layui-btn-fluid{background:#8C1D18 !important;color:#FFDAD6 !important;}'
-      + '.layui-table td,.layui-table th,.layui-table-cell{background:#1C1B1F !important;color:#E6E1E5 !important;border-color:#49454F !important;}'
-      + '.layui-table thead tr,.layui-table-header,.layui-table thead{background:#2B2930 !important;}'
-      + '.layui-icon,.iconfont{color:#E6E1E5 !important;}'
+      + 'button[lay-filter],.layui-btn-primary.layui-btn-fluid{background:#0D71E3 !important;color:#FFFFFF !important;}'
+      + '.layui-table td,.layui-table th,.layui-table-cell{background:#232931 !important;color:#EDEEF0 !important;border-color:#39444F !important;}'
+      + '.layui-table thead tr,.layui-table-header,.layui-table thead{background:#1E232B !important;}'
+      + '.layui-icon,.iconfont{color:#EDEEF0 !important;}'
       + 'img{opacity:0.95 !important;}'
       + 'img.layadmin-user-login-codeimg,#captcha_img{opacity:1 !important;background:#fff !important;}'
       + 'canvas,svg{background:transparent !important;}';
@@ -91,12 +94,12 @@ class WebViewDarkTheme {
           if (tag === 'img' || tag === 'video' || tag === 'canvas' || tag === 'svg' || tag === 'path') continue;
           var st = window.getComputedStyle(el);
           if (isLightBg(st.backgroundColor)) {
-            el.style.setProperty('background-color', '#1C1B1F', 'important');
+            el.style.setProperty('background-color', '#232931', 'important');
             el.style.setProperty('background-image', 'none', 'important');
-            el.style.setProperty('background', '#1C1B1F', 'important');
+            el.style.setProperty('background', '#232931', 'important');
           }
           if (tag !== 'input' && tag !== 'textarea' && isDarkText(st.color)) {
-            el.style.setProperty('color', '#E6E1E5', 'important');
+            el.style.setProperty('color', '#EDEEF0', 'important');
           }
         } catch (e) {}
       }
@@ -113,13 +116,13 @@ class WebViewDarkTheme {
       }
       if (s.styleSheet) { s.styleSheet.cssText = css; } else { s.innerHTML = css; }
       try {
-        document.documentElement.style.setProperty('background', '#1C1B1F', 'important');
-        document.documentElement.style.setProperty('background-color', '#1C1B1F', 'important');
-        document.documentElement.style.setProperty('color', '#E6E1E5', 'important');
+        document.documentElement.style.setProperty('background', '#232931', 'important');
+        document.documentElement.style.setProperty('background-color', '#232931', 'important');
+        document.documentElement.style.setProperty('color', '#EDEEF0', 'important');
         if (document.body) {
-          document.body.style.setProperty('background', '#1C1B1F', 'important');
-          document.body.style.setProperty('background-color', '#1C1B1F', 'important');
-          document.body.style.setProperty('color', '#E6E1E5', 'important');
+          document.body.style.setProperty('background', '#232931', 'important');
+          document.body.style.setProperty('background-color', '#232931', 'important');
+          document.body.style.setProperty('color', '#EDEEF0', 'important');
         }
       } catch (e) {}
       paintLightNodes();
