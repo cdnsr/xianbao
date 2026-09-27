@@ -1,7 +1,11 @@
 {
-  "version": "1.5.2",
-  "desc": "线报酷 1.5.2\n由 tag v1.5.2 自动构建（29aa6e6）\n推荐下载 armv8 安装包。",
+  "version": "1.5.3",
+  "desc": "线报酷 1.5.3\n由 tag v1.5.3 自动构建（4691db7）\n推荐下载 armv8 安装包。",
   "history": [
+    {
+      "version": "1.5.2",
+      "desc": "线报酷 1.5.2\n由 tag v1.5.2 自动构建（29aa6e6）\n推荐下载 armv8 安装包。"
+    },
     {
       "version": "1.5.1",
       "desc": "线报酷 1.5.1\n由 tag v1.5.1 自动构建（cd1cb8a）\n推荐下载 armv8 安装包。"
