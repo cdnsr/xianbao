@@ -17,6 +17,33 @@ class ArticleListItem {
   /// Empty when the source did not provide one.
   final String figureClass;
 
+  /// Raw price string (`data-price` / push `price`); empty means "no price",
+  /// which the site treats differently from `0` in its price rules.
+  final String price;
+
+  /// Push feed field `platforms`; the site prefers it over the catename tail
+  /// when deriving a mall name on the 我的关注 page.
+  final String platforms;
+
+  /// `data-type`; 值得买 items carry `smzdm`.
+  final String type;
+
+  /// `data-brand` (未参与筛选，随 DOM 一起带出来)。
+  final String brand;
+
+  /// `data-mall_name` (值得买条目的商城名)。
+  final String mallName;
+
+  /// `data-category_name` (值得买条目的分类路径)。
+  final String categoryName;
+
+  /// Category id: push feeds carry `cateid`, list markup encodes it in the
+  /// figure class (`cg30`). Used by the site's channel rules (10 weibo/30 haodan).
+  final int? cateId;
+
+  /// `li.article-list.top`. Pinned items are exempt from the site's filters.
+  final bool isTop;
+
   ArticleListItem({
     required this.url,
     required this.title,
@@ -28,6 +55,14 @@ class ArticleListItem {
     required this.author,
     this.authorRegistrationTime,
     this.figureClass = '',
+    this.price = '',
+    this.platforms = '',
+    this.type = '',
+    this.brand = '',
+    this.mallName = '',
+    this.categoryName = '',
+    this.cateId,
+    this.isTop = false,
   });
 
   String get path => url;
@@ -82,6 +117,14 @@ class ArticleListItem {
     'author': author,
     'authorRegistrationTime': authorRegistrationTime,
     'figureClass': figureClass,
+    'price': price,
+    'platforms': platforms,
+    'type': type,
+    'brand': brand,
+    'mallName': mallName,
+    'categoryName': categoryName,
+    'cateId': cateId,
+    'isTop': isTop,
   };
 
   factory ArticleListItem.fromJson(Map<String, dynamic> json) {
@@ -96,6 +139,14 @@ class ArticleListItem {
       author: json['author'] as String? ?? '',
       authorRegistrationTime: json['authorRegistrationTime'],
       figureClass: json['figureClass'] as String? ?? '',
+      price: json['price'] as String? ?? '',
+      platforms: json['platforms'] as String? ?? '',
+      type: json['type'] as String? ?? '',
+      brand: json['brand'] as String? ?? '',
+      mallName: json['mallName'] as String? ?? '',
+      categoryName: json['categoryName'] as String? ?? '',
+      cateId: (json['cateId'] as num?)?.toInt(),
+      isTop: json['isTop'] as bool? ?? false,
     );
   }
 
@@ -119,6 +170,13 @@ class ArticleListItem {
       author: json['louzhu'] as String? ?? '',
       authorRegistrationTime: json['louzhuregtime'],
       figureClass: cateId == null ? '' : 'cg$cateId',
+      price: json['price']?.toString() ?? '',
+      platforms: json['platforms']?.toString() ?? '',
+      type: json['type']?.toString() ?? '',
+      brand: json['brand']?.toString() ?? '',
+      mallName: json['mall_name']?.toString() ?? '',
+      categoryName: json['category_name']?.toString() ?? '',
+      cateId: cateId,
     );
   }
 
@@ -141,6 +199,7 @@ class ArticleListItem {
       final a = li.querySelector('p.title > a');
       if (a == null) continue;
       final timeEl = li.querySelector('time.badge');
+      final figureClass = _parseFigureClass(li.querySelector('span.figure'));
       items.add(
         ArticleListItem(
           url: a.attributes['href'] ?? '',
@@ -153,11 +212,25 @@ class ArticleListItem {
           time: timeEl?.attributes['title'] ?? '',
           author: a.attributes['data-louzhu'] ?? '',
           authorRegistrationTime: a.attributes['data-louzhuregtime'],
-          figureClass: _parseFigureClass(li.querySelector('span.figure')),
+          figureClass: figureClass,
+          price: a.attributes['data-price'] ?? '',
+          type: a.attributes['data-type'] ?? '',
+          brand: a.attributes['data-brand'] ?? '',
+          mallName: a.attributes['data-mall_name'] ?? '',
+          categoryName: a.attributes['data-category_name'] ?? '',
+          cateId: _cateIdFromFigure(figureClass),
+          isTop: li.classes.contains('top'),
         ),
       );
     }
     return items;
+  }
+
+  /// Category id encoded in a figure class (`cg30` -> 30); null when absent.
+  static int? _cateIdFromFigure(String figureClass) {
+    final match = RegExp(r'^cg(\d+)').firstMatch(figureClass);
+    if (match == null) return null;
+    return int.tryParse(match.group(1)!);
   }
 
   /// Extracts the `cg*` token from `span.figure.cg30`.

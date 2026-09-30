@@ -5,6 +5,14 @@ import 'dart:convert';
 import 'dart:typed_data';
 import '../utils/cookie_header_codec.dart';
 
+/// Path of a category page for a given page number.
+///
+/// The site moved category pagination from `/category-{slug}/page/{n}/` to
+/// `/category-{slug}/{n}/`; the old form now silently serves page 1 (making the
+/// list repeat itself) or nothing at all on channel pages.
+String categoryPagePath(String slug, int page) =>
+    page <= 1 ? '/category-$slug/' : '/category-$slug/$page/';
+
 /// Singleton Dio instance with cookie management, shared across the app.
 class HttpClient {
   static const String baseUrl = 'https://new.xianbao.fun';
@@ -102,15 +110,8 @@ class HttpClient {
 
   /// Fetch a category page.
   Future<String> fetchCategoryPage(String slug, {int page = 1}) async {
-    if (page <= 1) {
-      final resp = await dio.get<Uint8List>(
-        '/category-$slug/',
-        options: Options(responseType: ResponseType.bytes),
-      );
-      return _decodeBytes(resp.data ?? []);
-    }
     final resp = await dio.get<Uint8List>(
-      '/category-$slug/page/$page/',
+      categoryPagePath(slug, page),
       options: Options(responseType: ResponseType.bytes),
     );
     return _decodeBytes(resp.data ?? []);

@@ -56,6 +56,14 @@ class CategoryItem {
     return items;
   }
 
+  /// Page `<title>`, e.g. `赚客吧-线报酷`.
+  ///
+  /// The website derives its 「分类页:名称」 filter scopes from the title
+  /// segments (see `xb_global_main_scopes`), so the app needs the same string.
+  static String parsePageTitle(String html) {
+    return parse(html).querySelector('title')?.text.trim() ?? '';
+  }
+
   static List<dom.Element> _directChildren(dom.Element parent, String tagName) {
     final result = <dom.Element>[];
     for (final child in parent.children) {

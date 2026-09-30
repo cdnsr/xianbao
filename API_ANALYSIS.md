@@ -83,6 +83,18 @@
 
 分页规律：`/page/{n}/`，总页数从 `.pagebar` 中提取。
 
+> **分类页分页另走一套格式（2026-09 改版）**：分类页的下一页链接是
+> `/category-{slug}/{n}/`（如 `/category-haodan/2/`），**不是**首页那套
+> `/category-{slug}/page/{n}/`。旧地址现在不会报错，而是安静地给出错的内容：
+>
+> | 地址 | 结果 |
+> |---|---|
+> | `/category-haodan/2/` | 正常，100 条 |
+> | `/category-haodan/page/2/` | 0 条 |
+> | `/category-guanzhu1/page/2/` | 静默返回**第 1 页**内容（列表会无限重复首页） |
+>
+> 取路径见 `lib/services/http_client.dart` 的 `categoryPagePath()`。
+
 ---
 
 ### 2. 实时推送 JSON API（自动刷新）
@@ -121,23 +133,89 @@
 
 > **注意：** 此接口仅返回最新推送的少量文章（增量更新），不是完整分页列表。可用于首页"新文章提示"功能，但不能替代分页列表。
 
-#### 2.1 登录用户过滤机制（2026-07-15 补充）
+#### 2.1 用户筛选规则（2026-09 全面改版）
 
-`push.json` 是公共数据源，不根据登录 Cookie 返回不同内容。实测同一时刻使用未登录请求和登录 Cookie 请求，响应长度与 SHA-256 完全一致。
+> **旧协议已废弃**：老版本靠 `listfilter(xindata, 11个字符串)` / `liebiaoshaixuan(...)`
+> 传位置参数，现在脚本里只剩 worker 中一处参数全空的 `listfilter(...)` 调用。
+> 仍然按它解析会得到 11 条空规则，等于**关键词屏蔽整体失效**。
 
-网站通过以下动态脚本下发当前用户的首页过滤规则：
+网站把筛选拆成三层，全部在浏览器里执行；App 必须自己取脚本、解析规则、对列表与
+增量逐条判定。
 
-```text
-GET /zb_users/theme/xianbao_theme/script/meta.php?type=index&pagination=1
+**① 全局筛选** `window.xb_global_filter`（Ucenter「全局筛选」，首页/分类页/文章页
+的 `meta.php` 里下发）：
+
+```json
+{"status":0,"bankuai":[],"louzhuregtime":"","rows":[],"legacy":{"kw":0,"keywords":[],"fanwei":[]}}
 ```
 
-- 未登录时，脚本中的 `listfilter(xindata, ...)` 11 个过滤参数为空。
-- 登录时，服务器根据用户中心设置生成对应参数。例如当前测试账户的第一项“屏蔽分类”规则为 `美妆|母婴|健康|...`。
-- 首页首屏 SSR 列表由 `liebiaoshaixuan(...)` 在浏览器端过滤。
-- Web Worker 仍轮询公共 `push.json`，每条增量数据由同一组参数调用 `listfilter(...)` 后决定是否插入列表。
-- 规则覆盖分类、楼主、标题、正文关键词、保留规则、附加屏蔽规则和楼主注册时长，共 11 项。
+- `status != 1` → 未启用，直接放行；
+- `rows[]`：每行 `{fanwei,title_gjc,title_pbc,category_gjc,category_pbc,louzhu_gjc,louzhu_pbc,Miprice,Mxprice}`，
+  `fanwei` 是该行生效的板块范围（空 = 全部）。**行间 OR**：条目被任一行通过才保留，
+  全空行直通；预筛后没有任何行声明当前板块 → 本板块直通（避免板块规则互相清空）；
+- `legacy`：老键兜底，只在 `rows` 为空且 `kw == 1` 时生效，语义是"屏蔽"——`keywords`
+  任一词命中标题/内容/楼主即移除，`fanwei` 非空时仅对 catename 以其为前缀的条目生效；
+- `louzhuregtime`：楼主注册天数小于该值 → 移除。
 
-Flutter App 因此必须先将 WebView 登录 Cookie 同步给 Dio，再请求 `meta.php`、解析规则，并对首页 HTML 列表和 `push.json` 增量执行相同的本地过滤。仅向 `push.json` 携带 Cookie 不会产生过滤效果。
+范围 token（`fanwei` 与当前页面的匹配口径）：
+
+| 页面 | scope |
+|---|---|
+| 首页 | `主列表` / `首页` |
+| 分类页 | `主列表` / `分类页` / `分类页:{标题各段}`（如「赚客吧-线报酷」→ `分类页:赚客吧`、`分类页:线报酷`） |
+| 推送增量 | `推送` |
+| 侧栏我的关注（`/plus/` 侧栏） | `我的关注`（旧值 `侧栏我的关注` 仍兼容） |
+
+`分类页:` token 支持前缀宽松命中（范围词 `微博` 命中 `分类页:微博线报`）。
+
+**② 页面级筛选** `window.xb_config`（分类页/频道页，`type=category` 的 `meta.php`）：
+
+- 形态既可能是数组 `[{...}]`，也可能是对象 `{"zdmdefault":{...}}`，网站用
+  `Object.values()` 遍历，两种都能吃；
+- 字段与全局筛选的行一致，另有 `Status`（`=== 1` 才生效）与 `brand_*`/`mall_*`；
+- URL 带 `?k=&kp=&cate=&mall=&mip=&mxp=` 时脚本会**整份覆盖**成一行 `xbquick`
+  （字段值是裸 JS 变量）。App 不带这些参数，解析时应跳过这类裸变量行；
+- 页面一旦带 `window.xb_page_flag`，网站就**跳过全局筛选**（`xb_global_mainfilter`
+  见到它直接 return），只走这一层；
+- 分支按页面类型选：`guanzhu`（我的关注：价格 → 标题 → 分类 → 商城 → 楼主，分类用
+  完整 catename 匹配）、频道页（微博/好单：catename 拆「中段=分类 / 尾段=商城」，
+  无价条目放行）、值得买（`data-type=smzdm`）。
+
+**③ 关注页召回守卫** `window.xb_guanzhu_recall`（只作用于**推送条目**）：
+
+```json
+{"keywords":["线报活动","赚客吧","新赚吧","小嘀咕","豆瓣线报"],"authors":[],"excludes":[],"operator":"OR"}
+```
+
+- 只用在推送上；SSR 列表已由服务端按同一条件召回，网站不会二次过滤；
+- 匹配文本是「标题 + 分类名」直接拼接，再接换行 + 正文；`authors` 匹配楼主；
+  `excludes` 任一命中即丢弃；
+- 组合语义：`keywords` 与 `authors` 并存时 `AND` = 全部关键词命中且作者命中、
+  `OR`/其他 = 任一命中；只有 `keywords` 时 `AND` = 全部、`OR` = 任一；全空 → 放行。
+
+**关键词匹配方式（全站统一）**：按 `#` / `|` / `<br>` / 换行拆词，逐词做**字面量**
+包含匹配（`indexOf`，大小写敏感，空词丢弃）。改版后正则已下线，词内的 `.` `?` `+`
+等符号一律按普通字符处理。（旧版是 `RegExp`，大小写也不敏感。）
+
+**「我的关注」页的真实数据**（`type=category&cateid=5&catename=guanzhu1`）：该页拉的是
+**站级** `/plus/json/push.json`，逐条过 `召回守卫 → xb_config → ["推送"] 全局筛选`
+后才插入列表。实测某账号的 `xb_config` 只有一行
+`category_gjc = 赚客吧#新赚吧#微博线报#豆瓣线报#小嘀咕`，当时 20 条推送里只有 5 条
+该出现——不做过滤就会把好单/值得买/酷安等全混进来。
+
+该页的 **SSR 列表是跟着 Cookie 变的**（同一时刻实测：登录 34 条 / 未登录 101 条），
+所以 App 必须带上登录 Cookie 请求分类页，拿到的才是服务端按召回条件筛过的列表。
+
+**其他注意**：
+
+- `li.article-list.top`（置顶）豁免主列表的两种筛选；
+- SSR 列表路径**不校验价格**，推送路径才校验 `Miprice`/`Mxprice` vs 条目 `price`
+  （网站自身的不对称，照搬）；行带价格约束时「无价」条目在该行不通过；
+- 注册天数：网站两条路径口径不同（推送认 10 位秒级时间戳，DOM 只认 `2014-2-11`
+  这类日期串）。
+- 搜索页不带全局筛选脚本，搜索结果不做筛选。
+
+Flutter 侧实现见 `lib/models/site_filter.dart`，接线见 `lib/services/api_service.dart`。
 
 ---
 

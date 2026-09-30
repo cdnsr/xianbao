@@ -89,11 +89,6 @@ class _HomePageState extends State<HomePage> {
   int _sessionReloadId = 0;
   bool _initialCacheApplied = false;
 
-  /// Resolved push feed path per category, cached for this page's lifetime.
-  /// A null value means the category declares no feed (the site does not
-  /// refresh it either); failures are not cached, so they retry next tick.
-  final Map<int, String?> _categoryFeedUrls = <int, String?>{};
-
   @override
   void initState() {
     super.initState();
@@ -130,9 +125,9 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _reloadForSessionChange() async {
-    // Per-category feed config can differ per account (e.g. 我的关注), so it
-    // is re-resolved after a login change.
-    _categoryFeedUrls.clear();
+    // Filter rules and push feeds are issued per account (e.g. 我的关注), so
+    // everything resolved for the previous session has to go.
+    _api.resetForSessionChange();
     if (_selectedCategory != null) {
       await _loadPage(1, force: true);
       return;
@@ -265,10 +260,10 @@ class _HomePageState extends State<HomePage> {
   /// Picks the refresh source for the current view.
   ///
   /// The website auto-refreshes a category only when its own meta script
-  /// declares a push feed (`postjson.url`), so we resolve that feed instead of
-  /// assuming `push_{cateId}.json`. Categories the site does not refresh - the
-  /// drawer has 11 of them, e.g. 我的关注、公告、教程、线报库、归档 - declare no
-  /// feed and are left alone, matching the site.
+  /// declares a push feed (`postjson.url`), and filters every pushed entry
+  /// through that page's own rules before inserting it. `ApiService` resolves
+  /// both from one meta request, so categories the site does not refresh (the
+  /// drawer has 11 of them, e.g. 公告、教程、线报库、归档) stay put.
   Future<List<ArticleListItem>> _fetchCandidateArticles() async {
     final category = _selectedCategory;
     if (category == null) return _api.fetchNewArticles();
@@ -279,17 +274,10 @@ class _HomePageState extends State<HomePage> {
     final cateId = _currentCateId;
     if (cateId == null) return const <ArticleListItem>[];
 
-    final feedUrl = await _resolveCategoryFeedUrl(cateId, category.slug);
-    if (feedUrl == null) return const <ArticleListItem>[];
-
-    return _api.fetchArticlesFromFeed(feedUrl, fallbackCateId: cateId);
-  }
-
-  Future<String?> _resolveCategoryFeedUrl(int cateId, String slug) async {
-    if (_categoryFeedUrls.containsKey(cateId)) return _categoryFeedUrls[cateId];
-    final url = await _api.fetchCategoryPushFeedUrl(cateId: cateId, slug: slug);
-    _categoryFeedUrls[cateId] = url;
-    return url;
+    return _api.fetchCategoryNewArticles(
+      cateId: cateId,
+      slug: category.slug,
+    );
   }
 
   void _onScroll() {
