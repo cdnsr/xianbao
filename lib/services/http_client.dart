@@ -89,15 +89,16 @@ class HttpClient {
     return _decodeBytes(resp.data ?? []);
   }
 
-  /// Fetch JavaScript containing the current user's homepage filter rules.
-  Future<String> fetchHomeFilterScript() async {
+  /// Fetch the theme's meta script by path (page HTML carries the exact URL).
+  ///
+  /// It holds the page's whole filter configuration (global filter, page rules,
+  /// recall conditions, channel guard) plus the worker / push config the website
+  /// uses to refresh that page (`postjson.url`). The response is `no-store` and
+  /// account-scoped, and it *does* vary with the query string, so callers pass
+  /// the very path the page's `<script src>` uses.
+  Future<String> fetchMetaScript(String path) async {
     final resp = await dio.get<Uint8List>(
-      '/zb_users/theme/xianbao_theme/script/meta.php',
-      queryParameters: {
-        'type': 'index',
-        'pagination': '1',
-        '_': DateTime.now().millisecondsSinceEpoch,
-      },
+      path,
       options: Options(
         responseType: ResponseType.bytes,
         headers: const {
@@ -147,34 +148,6 @@ class HttpClient {
     final resp = await dio.get<Uint8List>(
       path,
       options: Options(responseType: ResponseType.bytes),
-    );
-    return _decodeBytes(resp.data ?? []);
-  }
-
-  /// Fetch the theme meta script for a category page.
-  ///
-  /// It carries the worker / push configuration the website uses to refresh
-  /// that category (`postjson.url`, `postjson.jiangeshijian`). Categories the
-  /// site does not auto-refresh have no such config in here.
-  Future<String> fetchCategoryMetaScript({
-    required int cateId,
-    required String slug,
-  }) async {
-    final resp = await dio.get<Uint8List>(
-      '/zb_users/theme/xianbao_theme/script/meta.php',
-      queryParameters: {
-        'type': 'category',
-        'cateid': '$cateId',
-        'catename': slug,
-        'pagination': '1',
-        '_': DateTime.now().millisecondsSinceEpoch,
-      },
-      options: Options(
-        responseType: ResponseType.bytes,
-        headers: const {
-          'Accept': 'application/javascript, text/javascript, */*',
-        },
-      ),
     );
     return _decodeBytes(resp.data ?? []);
   }

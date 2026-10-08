@@ -133,17 +133,29 @@
 
 > **注意：** 此接口仅返回最新推送的少量文章（增量更新），不是完整分页列表。可用于首页"新文章提示"功能，但不能替代分页列表。
 
-#### 2.1 用户筛选规则（2026-09 全面改版）
+#### 2.1 用户筛选规则（2026-10 现行版）
 
-> **旧协议已废弃**：老版本靠 `listfilter(xindata, 11个字符串)` / `liebiaoshaixuan(...)`
-> 传位置参数，现在脚本里只剩 worker 中一处参数全空的 `listfilter(...)` 调用。
-> 仍然按它解析会得到 11 条空规则，等于**关键词屏蔽整体失效**。
+> **两个已废弃的旧协议**：更早的 `listfilter(xindata, 11个字符串)` 只剩普通分类页的
+> 推送 handler 里还在传参（对本账号实参是「显示标题=(.*)」，等于不筛）；2026-09
+> 那版「页面级 `xb_config` 三分支 + 全局 `["推送"]`」也已经被 20261001～20261008
+> 的几次改动换掉了。**筛选配置现在不在页面 HTML 里**，而是页面用一条 `<script>`
+> 单独拉下来的：
 
-网站把筛选拆成三层，全部在浏览器里执行；App 必须自己取脚本、解析规则、对列表与
-增量逐条判定。
+```html
+<script defer src="/zb_users/theme/xianbao_theme/script/meta.php?type=index&pagination=1&zdmserver=1"></script>
+```
 
-**① 全局筛选** `window.xb_global_filter`（Ucenter「全局筛选」，首页/分类页/文章页
-的 `meta.php` 里下发）：
+`meta.php` 是 `Cache-Control: no-store` 的动态脚本，按账号下发，一次带全该页需要的
+全部筛选信息。**同一个页面的查询串会改变响应内容**，App 必须照抄页面里那一份地址
+（`lib/models/page_meta.dart` 的 `metaScriptPath()`），自己拼会拿到形状不同的配置：
+
+| 地址差异 | 响应差异（实测） |
+|---|---|
+| 首页带 `zdmserver=1`（网站自己带的） | 不做主列表的客户端筛选（服务端已筛）、下发同一屏蔽词的 `title_pbc`；条目 `data-price` 由服务端补 |
+| 首页不带 `zdmserver=1` | 内联「价格提取 IIFE + `xb_rows_pass` DOM 块」自己筛，同一个词落在 `category_pbc` |
+| 分类页不带 `cate-name` | 推送的全局范围下发 `["推送"]`；带上（浏览器就是这么带的）则下发空串 |
+
+**① 全局筛选** `window.xb_global_filter`（Ucenter「全局筛选」，服务端下推的那份）：
 
 ```json
 {"status":0,"bankuai":[],"louzhuregtime":"","rows":[],"legacy":{"kw":0,"keywords":[],"fanwei":[]}}
@@ -153,9 +165,13 @@
 - `rows[]`：每行 `{fanwei,title_gjc,title_pbc,category_gjc,category_pbc,louzhu_gjc,louzhu_pbc,Miprice,Mxprice}`，
   `fanwei` 是该行生效的板块范围（空 = 全部）。**行间 OR**：条目被任一行通过才保留，
   全空行直通；预筛后没有任何行声明当前板块 → 本板块直通（避免板块规则互相清空）；
+- **价格区间（20261001 新增）**：`Miprice`/`Mxprice` 现在**两条路径都校验**（旧的
+  「SSR 列表不校验价格」不对称已取消）。无价条目在价格行放行；主列表条目没有
+  `data-price` 时，网站会用 meta.php 内联的价格提取 IIFE 从标题补
+  （`[¥￥]\s*(数) | (数)\s*元`，见 `priceFromTitle()`）；
 - `legacy`：老键兜底，只在 `rows` 为空且 `kw == 1` 时生效，语义是"屏蔽"——`keywords`
   任一词命中标题/内容/楼主即移除，`fanwei` 非空时仅对 catename 以其为前缀的条目生效；
-- `louzhuregtime`：楼主注册天数小于该值 → 移除。
+- `louzhuregtime`：楼主注册天数小于该值（可以是小数）→ 移除。
 
 范围 token（`fanwei` 与当前页面的匹配口径）：
 
@@ -163,25 +179,41 @@
 |---|---|
 | 首页 | `主列表` / `首页` |
 | 分类页 | `主列表` / `分类页` / `分类页:{标题各段}`（如「赚客吧-线报酷」→ `分类页:赚客吧`、`分类页:线报酷`） |
-| 推送增量 | `推送` |
-| 侧栏我的关注（`/plus/` 侧栏） | `我的关注`（旧值 `侧栏我的关注` 仍兼容） |
+| 排行榜页 | `排行榜`（旧值 `热榜` 兼容） |
+| 推送（首页） | `推送` / `主列表` / `首页`（三个一起递，见下） |
+| 推送（分类页/频道页/关注页） | 服务端下发的是**空 token**，只有 `fanwei` 留空的行生效 |
 
 `分类页:` token 支持前缀宽松命中（范围词 `微博` 命中 `分类页:微博线报`）。
 
-**② 页面级筛选** `window.xb_config`（分类页/频道页，`type=category` 的 `meta.php`）：
+**② 用户端全局列表筛选** `window.xb_global_fe_filter`（`20261001` 新增，只有
+`status`/`rows`）：服务端零消费、纯浏览器本地过滤，**所有列表页（含频道页）都要过**，
+与全局筛选并行生效。本账号没启用（变量不存在），App 按「有就叠加」实现。
 
-- 形态既可能是数组 `[{...}]`，也可能是对象 `{"zdmdefault":{...}}`，网站用
-  `Object.values()` 遍历，两种都能吃；
-- 字段与全局筛选的行一致，另有 `Status`（`=== 1` 才生效）与 `brand_*`/`mall_*`；
+**③ 页面级筛选** `window.xb_config`（分类页/频道页/关注页/首页各自的规则行），两条判定口径：
+
+- **`xb_listfilter`（关注页/频道页/值得买三个分支）**：主列表与推送都用它。关注页分支
+  按 价格 → 标题 → 分类（完整 catename）→ 商城（`platforms` 优先，回退 catename 尾段）
+  → 楼主；频道页分支把 catename 拆「中段=分类 / 尾段=商城」，无价条目放行；值得买分支
+  走 `data-type=smzdm`（商城名那一步网站把实参写反了，App 照搬了线上的方向）。
+- **`xb_rows_pass`（首页推送守卫 `xb_json_guard`、首页内联 DOM 块）**：先按 `fanwei`
+  是否覆盖 catename 挑行（一条都不覆盖 → 整条丢），**屏蔽词是全局否决**（任一行命中
+  标题/分类/楼主的屏蔽词即丢），正向条件行之间 OR（至少一行完整通过）。与
+  `xb_listfilter` 的"行间 OR"不是一回事。
+- 形态既可能是数组 `[{...}]`，也可能是对象 `{"zdmdefault":{...}}`，两种都能吃；
 - URL 带 `?k=&kp=&cate=&mall=&mip=&mxp=` 时脚本会**整份覆盖**成一行 `xbquick`
-  （字段值是裸 JS 变量）。App 不带这些参数，解析时应跳过这类裸变量行；
+  （字段值是裸 JS 变量）。App 不带这些参数，解析时跳过这类裸变量行；
 - 页面一旦带 `window.xb_page_flag`，网站就**跳过全局筛选**（`xb_global_mainfilter`
   见到它直接 return），只走这一层；
-- 分支按页面类型选：`guanzhu`（我的关注：价格 → 标题 → 分类 → 商城 → 楼主，分类用
-  完整 catename 匹配）、频道页（微博/好单：catename 拆「中段=分类 / 尾段=商城」，
-  无价条目放行）、值得买（`data-type=smzdm`）。
+- **轮询开关** `window.xb_guanzhu_poll_on`：关注页不为 1 时 `xb_listfilter` 一行都不
+  放行（游客那份 `xb_config` 是空对象，所以游客不受影响）；关注页推送也只在它为 1
+  时才插。
 
-**③ 关注页召回守卫** `window.xb_guanzhu_recall`（只作用于**推送条目**）：
+**④ 频道守卫** `window.xb_channel_guard`（微博/好单频道页）：`{channel, cateId,
+cateName, platformNames}`。子频道页（如 `/category-haodan-jd/`）cateId 与父频道相同
+（都是 30），靠 `platformNames`（尾段等值命中）与 `cateName`（中段包含）再筛一层——
+不加这一层，好单的淘宝/猫超推送会混进「好单线报-京东」页。
+
+**⑤ 关注页召回守卫** `window.xb_guanzhu_recall`（只作用于**推送条目**）：
 
 ```json
 {"keywords":["线报活动","赚客吧","新赚吧","小嘀咕","豆瓣线报"],"authors":[],"excludes":[],"operator":"OR"}
@@ -193,29 +225,33 @@
 - 组合语义：`keywords` 与 `authors` 并存时 `AND` = 全部关键词命中且作者命中、
   `OR`/其他 = 任一命中；只有 `keywords` 时 `AND` = 全部、`OR` = 任一；全空 → 放行。
 
+**⑥ 推送的全局筛选范围**由页面自己声明，写在 worker handler 里：
+
+| 页面 | 调用 | 实际效果 |
+|---|---|---|
+| 首页 | `xb_global_jsonfilter(xindata, ["推送","主列表","首页"])` | 三个 token 都算 |
+| 分类页/频道页/关注页 | `xb_global_jsonfilter(xindata, )` | 空 token（服务端占位没替换）→ 只有 `fanwei` 留空的行 |
+| 值得买页 | 该页 handler 不调它 | 推送完全不过全局筛选 |
+
 **关键词匹配方式（全站统一）**：按 `#` / `|` / `<br>` / 换行拆词，逐词做**字面量**
 包含匹配（`indexOf`，大小写敏感，空词丢弃）。改版后正则已下线，词内的 `.` `?` `+`
 等符号一律按普通字符处理。（旧版是 `RegExp`，大小写也不敏感。）
 
-**「我的关注」页的真实数据**（`type=category&cateid=5&catename=guanzhu1`）：该页拉的是
-**站级** `/plus/json/push.json`，逐条过 `召回守卫 → xb_config → ["推送"] 全局筛选`
-后才插入列表。实测某账号的 `xb_config` 只有一行
-`category_gjc = 赚客吧#新赚吧#微博线报#豆瓣线报#小嘀咕`，当时 20 条推送里只有 5 条
-该出现——不做过滤就会把好单/值得买/酷安等全混进来。
-
-该页的 **SSR 列表是跟着 Cookie 变的**（同一时刻实测：登录 34 条 / 未登录 101 条），
-所以 App 必须带上登录 Cookie 请求分类页，拿到的才是服务端按召回条件筛过的列表。
+**页面级排除（20261002）**：站内搜索页（`/search.php` 与首页 quick 搜索 `/?k=`）与
+楼主记录页（`/record/…`）不应用列表筛选；首页/分类页带搜索参数时同样跳过用户中心
+筛选（`xb_search_mode`）。App 的搜索页本来就不筛，也没做楼主页。
 
 **其他注意**：
 
 - `li.article-list.top`（置顶）豁免主列表的两种筛选；
-- SSR 列表路径**不校验价格**，推送路径才校验 `Miprice`/`Mxprice` vs 条目 `price`
-  （网站自身的不对称，照搬）；行带价格约束时「无价」条目在该行不通过；
 - 注册天数：网站两条路径口径不同（推送认 10 位秒级时间戳，DOM 只认 `2014-2-11`
-  这类日期串）。
-- 搜索页不带全局筛选脚本，搜索结果不做筛选。
+  这类日期串）；App 两边都认 10 位时间戳（线上 DOM 不会出现这种值）；
+- **已知未实现**：普通分类页推送 handler 里那句带实参的 `listfilter(xindata, …)`
+  （老协议的「屏蔽分类/楼主/标题/内容/注册天数」）。本账号的实参是
+  「显示标题=(.*)」，等于不筛；要移植得先解析带转义的位置实参，收益极低，暂缓。
 
-Flutter 侧实现见 `lib/models/site_filter.dart`，接线见 `lib/services/api_service.dart`。
+Flutter 侧实现：引擎在 `lib/models/site_filter.dart`，meta 解析与判定在
+`lib/models/page_meta.dart`，接线在 `lib/services/api_service.dart`。
 
 ---
 

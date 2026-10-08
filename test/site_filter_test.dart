@@ -1,17 +1,27 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:xianbao/models/page_meta.dart';
 import 'package:xianbao/models/site_filter.dart';
 import 'package:xianbao/services/http_client.dart';
 
-/// 网站 2026-09 改版后的筛选引擎移植测试。
+/// 网站 2026-10 改版后的筛选引擎移植测试。
 ///
-/// 夹具全部取自线上真实响应（2026-09-30 抓取）：
+/// 夹具全部取自线上真实响应（2026-10-08 抓取）：
 ///
 /// - [_guanzhuMeta]：登录账号的「我的关注」分类 meta.php（`cookie.txt` 账号）；
-/// - [_guestRecallMeta]：未登录时的同一页 meta.php；
+/// - [_guestMeta]：未登录时的同一页 meta.php（`xb_config` 是空对象）；
 /// - [_weiboMeta] / [_zhidemaiMeta]：微博线报、值得买的 meta.php；
+/// - [_indexMeta]：首页 meta.php（`?type=index&pagination=1&zdmserver=1`，
+///   就是首页 HTML 里那个 `<script src>` 的地址）；
+/// - [_indexMetaNoZdmServer]：同一地址去掉 `zdmserver=1` 的变体——服务端会把
+///   主列表的规则行内联成 DOM 块，并且把同一个词下发在另一个字段上；
+/// - [_haodanJdMeta]：`/category-haodan-jd/`（子频道，cateId 与父频道相同）；
 /// - [_realCatenames]：当时 `/plus/json/push.json` 全部 20 条的 `catename`。
 const String _guanzhuMeta =
-    r'''$(function () {window.xb_global_filter={"status":0,"bankuai":[],"louzhuregtime":"","rows":[],"legacy":{"kw":0,"keywords":[],"fanwei":[]}};window.xb_page_flag='guanzhu';window.xb_page_sub='1';window.xb_config=[{"Status":1,"fanwei":"","title_gjc":"","title_pbc":"","brand_gjc":"","brand_pbc":"","category_gjc":"赚客吧#新赚吧#微博线报#豆瓣线报#小嘀咕","category_pbc":"","mall_gjc":"","mall_pbc":"","louzhu_gjc":"","louzhu_pbc":"","Miprice":"","Mxprice":""}];''';
+    r'''$(function () {window.xb_global_filter={"status":0,"bankuai":[],"louzhuregtime":"","rows":[],"legacy":{"kw":0,"keywords":[],"fanwei":[]}};window.xb_guanzhu_poll_on=1;window.xb_page_flag='guanzhu';window.xb_page_sub='1';window.xb_config=[{"Status":1,"fanwei":"","title_gjc":"","title_pbc":"","brand_gjc":"","brand_pbc":"","category_gjc":"赚客吧#新赚吧#微博线报#豆瓣线报#小嘀咕","category_pbc":"","mall_gjc":"","mall_pbc":"","louzhu_gjc":"","louzhu_pbc":"","Miprice":"","Mxprice":""}];xb_liebiaoshaixuan(xb_config);''';
+
+/// 未登录时的同一页：轮询开关是 0，`xb_config` 是空对象 —— 等于不筛选。
+const String _guestMeta =
+    r'''window.xb_guanzhu_poll_on=0;window.xb_page_flag='guanzhu';window.xb_page_sub='1';window.xb_guanzhu_recall={"keywords":["线报活动","赚客吧","新赚吧","小嘀咕","豆瓣线报"],"authors":[],"excludes":[],"operator":"OR"};window.xb_config={};xb_liebiaoshaixuan(xb_config);''';
 
 /// `赚客吧` 等转义解出来就是这条规则的关键词。
 const String _guanzhuKeywords = '赚客吧#新赚吧#微博线报#豆瓣线报#小嘀咕';
@@ -20,13 +30,70 @@ const String _guanzhuKeywords = '赚客吧#新赚吧#微博线报#豆瓣线报#�
 const String _guestRecallMeta =
     r'''window.xb_guanzhu_recall={"keywords":["线报活动","赚客吧","新赚吧","小嘀咕","豆瓣线报"],"authors":[],"excludes":[],"operator":"OR"};''';
 
-/// 微博线报/好单线报这类频道页：一行全空规则，等于不筛选。
+/// 微博线报/好单线报这类频道页：一行全空规则，等于不筛选；另带频道守卫。
 const String _weiboMeta =
-    r'''window.xb_page_flag='index';window.xb_config={"zdmdefault":{"Status":1,"fanwei":"","mall_name":"","title_gjc":"","title_pbc":"","brand_gjc":"","brand_pbc":"","category_gjc":"","category_pbc":"","mall_gjc":"","mall_pbc":"","Miprice":"","Mxprice":""}};''';
+    r'''window.xb_page_flag='index';window.xb_page_sub='';window.xb_channel_guard={"channel":"weibo","cateId":10,"cateName":"","platformNames":[]};window.xb_config={"zdmdefault":{"Status":1,"fanwei":"","mall_name":"","title_gjc":"","title_pbc":"","brand_gjc":"","brand_pbc":"","category_gjc":"","category_pbc":"","mall_gjc":"","mall_pbc":"","Miprice":"","Mxprice":""}};xb_liebiaoshaixuan(xb_config);''';
+
+/// 父频道「好单线报」：守卫只认 cateId，不限制平台。
+const String _haodanMeta =
+    r'''window.xb_page_flag='index';window.xb_page_sub='';window.xb_channel_guard={"channel":"haodan","cateId":30,"cateName":"","platformNames":[]};window.xb_config={"zdmdefault":{"Status":1,"fanwei":"","mall_name":"","title_gjc":"","title_pbc":"","brand_gjc":"","brand_pbc":"","category_gjc":"","category_pbc":"","mall_gjc":"","mall_pbc":"","Miprice":"","Mxprice":""}};xb_liebiaoshaixuan(xb_config);''';
+
+/// 2026-10-08 抓取的 `/plus/json/push_30.json` 全部 20 条 catename
+/// （好单线报频道的推送源，页面 slug `/category-haodan/` 与 `/category-haodan-jd/` 共用）。
+const List<String> _haodanFeedCatenames = <String>[
+  '好单线报-日用-京东',
+  '好单线报-美妆-淘宝',
+  '好单线报-宠物-淘宝',
+  '好单线报-宠物-淘宝|猫超',
+  '好单线报-家用-京东',
+  '好单线报-宠物-淘宝',
+  '好单线报-宠物-淘宝',
+  '好单线报-数码-京东',
+  '好单线报-数码-京东',
+  '好单线报-食品-京东',
+  '好单线报-服饰-淘宝',
+  '好单线报-服饰-其他活动',
+  '好单线报-食品-淘宝',
+  '好单线报-日用-京东',
+  '好单线报-服饰-淘宝',
+  '好单线报-饮料-淘宝',
+  '好单线报-母婴-淘宝',
+  '好单线报-母婴-淘宝',
+  '好单线报-家用-淘宝',
+  '好单线报-母婴-淘宝',
+];
 
 /// 值得买页的规则：只有 Mxprice，而且没有 `type`。
 const String _zhidemaiMeta =
-    r'''window.xb_page_flag='index';window.xb_config={"midoYbvHwPt":{"Status":1,"mall_name":"","title_gjc":"","title_pbc":"","category_gjc":"","category_pbc":"","Miprice":"","Mxprice":"1000000"}};''';
+    r'''window.xb_page_flag='index';window.xb_page_sub='';window.xb_config={"midoYbvHwPt":{"Status":1,"mall_name":"","title_gjc":"","title_pbc":"","category_gjc":"","category_pbc":"","Miprice":"","Mxprice":"1000000"}};xb_liebiaoshaixuan(xb_config);''';
+
+/// 首页（`zdmserver=1`，与首页 HTML 里那个 `<script src>` 一致）：全局筛选没启用，
+/// 但 `xb_config` 有一行屏蔽词，只作用于推送（`xb_json_guard`）。
+const String _indexMeta =
+    r'''$(function () {window.xb_global_filter={"status":0,"bankuai":[],"louzhuregtime":"","rows":[],"legacy":{"kw":0,"keywords":[],"fanwei":[]}};window.xb_texts={};window.xb_config=[{"Status":1,"fanwei":"","title_gjc":"","title_pbc":"好单线报","brand_gjc":"","brand_pbc":"","category_gjc":"","category_pbc":"","mall_gjc":"","mall_pbc":"","louzhu_gjc":"","louzhu_pbc":"","Miprice":"","Mxprice":""}];window.xb_json_fanwei=[];window.xb_json_guard = function (d) { return true; };if (window.xb_json_guard && window.xb_json_guard(xindata) == false) { return; }if (typeof xb_global_jsonfilter === "function") { xindata = xb_global_jsonfilter(xindata, ["推送","主列表","首页"]); if (!xindata) { return; } }''';
+
+/// 同一个首页、去掉 `zdmserver=1`：服务端把主列表的规则行内联成 DOM 块，并把
+/// 同一个屏蔽词下发在 `category_pbc` 上（字段位置随参数变，所以 App 必须照抄地址）。
+const String _indexMetaNoZdmServer =
+    r'''$(function () {window.xb_global_filter={"status":0,"bankuai":[],"louzhuregtime":"","rows":[],"legacy":{"kw":0,"keywords":[],"fanwei":[]}};window.xb_config=[{"Status":1,"fanwei":"","title_gjc":"","title_pbc":"","brand_gjc":"","brand_pbc":"","category_gjc":"","category_pbc":"好单线报","mall_gjc":"","mall_pbc":"","louzhu_gjc":"","louzhu_pbc":"","Miprice":"","Mxprice":""}];(function(){var items=document.querySelectorAll("#mainbox .new-post .article-list .title a");var re=/(?:[¥￥]\s*(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s*元)/;for(var i=0;i<items.length;i++){var a=items[i],p=a.getAttribute("data-price");if(p!==null&&p!==""){continue;}var m=re.exec(a.textContent||"");if(m){a.setAttribute("data-price",m[1]!==undefined?m[1]:m[2]);}}})();(function(){var items=document.querySelectorAll("#mainbox .new-post .article-list:not(.top) .title a");for(var i=0;i<items.length;i++){var a=items[i],cn=a.getAttribute("data-catename")||"",keep=window.xb_rows_pass(rows,a.getAttribute("title")||a.textContent||"",a.getAttribute("data-content")||"",cn,a.getAttribute("data-louzhu")||"",a.getAttribute("data-price")||"");if(!keep){a.parentNode.removeChild(a);}}})();''';
+
+/// 子频道页 `/category-haodan-jd/`：cateId 与父频道一样是 30，靠 platformNames
+/// 把推送再筛一层。
+const String _haodanJdMeta =
+    r'''window.xb_page_flag='index';window.xb_page_sub='';window.xb_channel_guard={"channel":"haodan","cateId":30,"cateName":"","platformNames":["京东","淘宝京东"]};window.xb_config={"zdmdefault":{"Status":1,"fanwei":"","mall_name":"","title_gjc":"","title_pbc":"","brand_gjc":"","brand_pbc":"","category_gjc":"","category_pbc":"","mall_gjc":"","mall_pbc":"","Miprice":"","Mxprice":""}};xb_liebiaoshaixuan(xb_config);if (typeof xb_global_jsonfilter === "function") { xindata = xb_global_jsonfilter(xindata, ); if (!xindata) { return; } }''';
+
+/// 普通分类页（赚客吧）：既没有 `xb_page_flag` 也没有 `xb_config`，只有全局筛选；
+/// 推送范围 token 是服务端占位没替换留下的空串。
+const String _zuankebaMeta =
+    r'''$(function () {window.xb_global_filter={"status":0,"bankuai":[],"louzhuregtime":"","rows":[],"legacy":{"kw":0,"keywords":[],"fanwei":[]}};window.xb_texts={};if (typeof xb_global_jsonfilter === "function") { xindata = xb_global_jsonfilter(xindata, ); if (!xindata) { return; } }''';
+
+/// 首页 HTML 里的 meta 地址（带 HTML 转义的 `&amp;`）。
+const String _homeHtmlScriptTag =
+    r'''<script defer src="/zb_users/theme/xianbao_theme/script/meta.php?type=index&amp;pagination=1&amp;zdmserver=1"></script>''';
+
+/// 分类页 HTML 里的 meta 地址：`cate-name` 是中文且带序号，App 拼不出来，只能抄。
+const String _categoryHtmlScriptTag =
+    r'''<script defer src="/zb_users/theme/xianbao_theme/script/meta.php?type=category&cateid=5&catename=guanzhu1&cate-name=我的关注①&pagination=1"></script>''';
 
 /// 快捷筛选行：字段是裸 JS 变量，只有 URL 带 `?k=` 时才会顶替服务端配置，
 /// 所以解析时必须跳过（App 从不带这些参数）。
@@ -93,7 +160,7 @@ void main() {
       expect(filter.status, 0);
       final item = const FilterItem(title: '随便', category: '赚客吧');
       expect(filter.keepsListItem(item, kHomeScopes), isTrue);
-      expect(filter.keepsPushItem(item, kPushScopes), isTrue);
+      expect(filter.keepsPushItem(item, kHomePushScopes), isTrue);
     });
 
     test('解析真实 meta 里的 xb_global_filter', () {
@@ -177,7 +244,7 @@ void main() {
       );
     });
 
-    test('价格约束只在推送路径生效（网站自身的不对称）', () {
+    test('价格区间两条路径都校验（20261001 起网站不再有不对称）', () {
       final filter = GlobalFilter.fromMetaScript(_globalMeta);
       final scopes = categoryScopes('赚客吧-线报酷');
       const expensive = FilterItem(
@@ -185,13 +252,20 @@ void main() {
         category: '赚客吧',
         price: '888',
       );
-      // SSR 列表路径不校验价格。
-      expect(filter.keepsListItem(expensive, scopes), isTrue);
-      // 推送路径校验 Mxprice。
+      // 第二行（分类页:赚客吧，Mxprice=100）超价 → 列表与推送都拦。
+      expect(filter.keepsListItem(expensive, scopes), isFalse);
       expect(filter.keepsPushItem(expensive, scopes), isFalse);
       expect(
         filter.keepsPushItem(
           const FilterItem(title: '商品', category: '赚客吧', price: '50'),
+          scopes,
+        ),
+        isTrue,
+      );
+      // 无价条目在价格行放行（频道线报大量无价，网站改过两次才定成放行）。
+      expect(
+        filter.keepsListItem(
+          const FilterItem(title: '商品', category: '赚客吧'),
           scopes,
         ),
         isTrue,
@@ -335,6 +409,22 @@ void main() {
       expect(page.keeps(zdm), isTrue);
     });
 
+    test('值得买商城名沿用网站的实参方向（拿条目名拆词查规则名）', () {
+      // 网站写的是 `xb_kwHit(item.mall_name, group.mall_name)`：先用**条目**的商城名
+      // 拆词，再看**规则**里的商城名是否包含其中某个词。方向与直觉相反（看着像网站
+      // 写反了），但线上就是这个结果，照搬。
+      final page = PageFilterRules.fromCategoryMetaScript(
+        r'''window.xb_page_flag='index';window.xb_config={"r":{"Status":1,"mall_name":"京东自营|天猫精选"}};''',
+      );
+      FilterItem zdm(String mall) =>
+          FilterItem(type: 'smzdm', title: '某商品', mallName: mall);
+      expect(page.keeps(zdm('京东')), isTrue);
+      expect(page.keeps(zdm('天猫精选')), isTrue);
+      // 条目名比规则名更具体 → 用它拆出来的词在规则名里找不到 → 该行不通过。
+      expect(page.keeps(zdm('京东自营旗舰店')), isFalse);
+      expect(page.keeps(zdm('拼多多')), isFalse);
+    });
+
     test('跳到裸变量的快捷筛选行，不把配置当规则', () {
       final page = PageFilterRules.fromCategoryMetaScript(_quickFilterMeta);
       expect(page.rows, isEmpty);
@@ -413,22 +503,22 @@ void main() {
     });
   });
 
-  group('keepMainListItem / keepPageListItem / keepPushItem', () {
+  group('主列表入口与 keepPushItem', () {
     test('置顶条目豁免筛选', () {
-      final page = PageFilterRules.fromCategoryMetaScript(_guanzhuMeta);
+      final meta = MetaFilterConfig.fromScript(_guanzhuMeta);
       const pinned = FilterItem(category: '好单线报-服饰-京东', isTop: true);
-      expect(keepPageListItem(pinned, page), isTrue);
+      expect(meta.keepsListItem(pinned, kHomeScopes), isTrue);
       // 非置顶的同一条会被页面规则拦掉。
       expect(
-        keepPageListItem(
+        meta.keepsListItem(
           const FilterItem(category: '好单线报-服饰-京东'),
-          page,
+          kHomeScopes,
         ),
         isFalse,
       );
     });
 
-    test('关注页推送：召回守卫 → 页面规则 → 全局筛选', () {
+    test('关注页推送：召回守卫 + 页面规则后只剩 5 条', () {
       final page = PageFilterRules.fromCategoryMetaScript(_guanzhuMeta);
       final global = GlobalFilter.fromMetaScript(_guanzhuMeta);
       final kept = _realCatenames
@@ -439,20 +529,18 @@ void main() {
     });
 
     test('普通分类页/首页不做页面级筛选，只有全局筛选把关', () {
-      final global = GlobalFilter.fromMetaScript(_globalMeta);
+      final meta = MetaFilterConfig.fromScript(_globalMeta);
       // 首页：标题规则生效。
       expect(
-        keepMainListItem(
+        meta.keepsListItem(
           const FilterItem(title: '普通商品', category: '好单线报-日用-京东'),
-          global,
           kHomeScopes,
         ),
         isFalse,
       );
       expect(
-        keepMainListItem(
+        meta.keepsListItem(
           const FilterItem(title: '整点秒杀', category: '好单线报-日用-京东'),
-          global,
           kHomeScopes,
         ),
         isTrue,
@@ -487,6 +575,305 @@ void main() {
       expect(categoryPagePath('haodan', 1), '/category-haodan/');
       expect(categoryPagePath('haodan', 2), '/category-haodan/2/');
       expect(categoryPagePath('guanzhu1', 3), '/category-guanzhu1/3/');
+    });
+  });
+
+  group('metaScriptPath（照抄页面的 meta 地址）', () {
+    test('取出 script src 并还原 &amp;', () {
+      expect(
+        metaScriptPath(_homeHtmlScriptTag),
+        '/zb_users/theme/xianbao_theme/script/meta.php'
+        '?type=index&pagination=1&zdmserver=1',
+      );
+    });
+
+    test('中文 + 序号的 cate-name 原样带出来（App 自己拼不出来）', () {
+      expect(
+        metaScriptPath(_categoryHtmlScriptTag),
+        '/zb_users/theme/xianbao_theme/script/meta.php?type=category&cateid=5'
+        '&catename=guanzhu1&cate-name=我的关注①&pagination=1',
+      );
+    });
+
+    test('页面里没有 meta script → null', () {
+      expect(metaScriptPath('<html><body>hi</body></html>'), isNull);
+      expect(metaScriptPath(''), isNull);
+    });
+  });
+
+  group('MetaFilterConfig（该页自己的判定方式）', () {
+    test('首页：推送守卫 xb_json_guard + 三个 token 的全局范围', () {
+      final meta = MetaFilterConfig.fromScript(_indexMeta);
+      expect(meta.usesJsonGuard, isTrue);
+      expect(meta.pushScopes, kHomePushScopes);
+      expect(meta.listUsesConfigRules, isFalse);
+      expect(meta.listUsesGuardRows, isFalse);
+      expect(meta.extractPriceFromTitle, isFalse);
+    });
+
+    test('去掉 zdmserver 的首页：主列表改由内联 DOM 块筛，价格从标题补', () {
+      final meta = MetaFilterConfig.fromScript(_indexMetaNoZdmServer);
+      expect(meta.listUsesGuardRows, isTrue);
+      expect(meta.extractPriceFromTitle, isTrue);
+      // 同一个屏蔽词这次落在 category_pbc 上 —— 参数不同，配置就不同。
+      expect(
+        meta.keepsListItem(
+          const FilterItem(title: '贝贝南瓜5斤 7.99元', category: '好单线报-果蔬-京东'),
+          kHomeScopes,
+        ),
+        isFalse,
+      );
+      expect(
+        meta.keepsListItem(
+          const FilterItem(title: '贝贝南瓜5斤 7.99元', category: '酷安'),
+          kHomeScopes,
+        ),
+        isTrue,
+      );
+    });
+
+    test('分类页：主列表走 xb_config，推送范围是空 token', () {
+      final meta = MetaFilterConfig.fromScript(_haodanJdMeta);
+      expect(meta.listUsesConfigRules, isTrue);
+      expect(meta.pushScopes, <String>['']);
+      expect(meta.page.channelGuard?.platformNames, <String>['京东', '淘宝京东']);
+    });
+
+    test('值得买页的推送压根不走全局 JSON 筛选', () {
+      expect(MetaFilterConfig.fromScript(_zhidemaiMeta).pushScopes, isNull);
+    });
+
+    test('关注页解析出轮询开关与召回条件', () {
+      final meta = MetaFilterConfig.fromScript(_guanzhuMeta);
+      expect(meta.page.pollOn, 1);
+      expect(meta.page.pageFlag, 'guanzhu');
+      expect(meta.page.pageSub, '1');
+    });
+
+    test('普通分类页：没有页面规则，推送只过全局筛选', () {
+      final meta = MetaFilterConfig.fromScript(_zuankebaMeta);
+      expect(meta.page.hasPageRules, isFalse);
+      expect(meta.page.rows, isEmpty);
+      expect(meta.pushScopes, <String>['']);
+      expect(meta.usesJsonGuard, isFalse);
+      expect(
+        meta.keepsPush(const FilterItem(title: '随便一条', category: '赚客吧')),
+        isTrue,
+      );
+    });
+  });
+
+  group('首页推送守卫（xb_json_guard / xb_rows_pass）', () {
+    test('规则行的屏蔽词命中标题 → 该条推送不插', () {
+      final meta = MetaFilterConfig.fromScript(_indexMeta);
+      expect(
+        meta.keepsPush(
+          const FilterItem(title: '好单线报 今日好单汇总', category: '酷安'),
+        ),
+        isFalse,
+      );
+      // title_pbc 只看标题+正文：分类名里带「好单线报」不触发（网站这次把词下发在
+      // 标题字段上，屏蔽的是标题里提到该词的条目）。
+      expect(
+        meta.keepsPush(
+          const FilterItem(title: '贝贝南瓜5斤 7.99元', category: '好单线报-果蔬-京东'),
+        ),
+        isTrue,
+      );
+    });
+
+    test('xb_rows_pass：正向行之间 OR', () {
+      final page = PageFilterRules.fromCategoryMetaScript(
+        r'''window.xb_config=[{"Status":1,"title_gjc":"秒杀|整点"},{"Status":1,"title_gjc":"买一送一"}];''',
+      );
+      final rows = page.rows;
+      expect(pageRowsPass(rows, const FilterItem(title: '整点抢券')), isTrue);
+      expect(pageRowsPass(rows, const FilterItem(title: '买一送一活动')), isTrue);
+      expect(pageRowsPass(rows, const FilterItem(title: '普通商品')), isFalse);
+    });
+
+    test('xb_rows_pass：屏蔽词是全局否决，压过其它行的正向命中', () {
+      final page = PageFilterRules.fromCategoryMetaScript(
+        r'''window.xb_config=[{"Status":1,"title_pbc":"广告"},{"Status":1,"title_gjc":"秒杀"}];''',
+      );
+      final rows = page.rows;
+      expect(pageRowsPass(rows, const FilterItem(title: '秒杀来了')), isTrue);
+      expect(pageRowsPass(rows, const FilterItem(title: '秒杀广告贴')), isFalse);
+      expect(pageRowsPass(rows, const FilterItem(title: '普通广告贴')), isFalse);
+    });
+
+    test('xb_rows_pass：只有屏蔽词没有正向条件时，未命中就保留', () {
+      final page = PageFilterRules.fromCategoryMetaScript(
+        r'''window.xb_config=[{"Status":1,"title_pbc":"广告"}];''',
+      );
+      final rows = page.rows;
+      expect(pageRowsPass(rows, const FilterItem(title: '正常内容')), isTrue);
+      expect(pageRowsPass(rows, const FilterItem(title: '广告内容')), isFalse);
+    });
+
+    test('xb_rows_pass：行的 fanwei 不覆盖分类名就不参与；都不覆盖则整条丢', () {
+      final page = PageFilterRules.fromCategoryMetaScript(
+        r'''window.xb_config=[{"Status":1,"fanwei":"豆瓣线报","title_gjc":"秒杀"}];''',
+      );
+      final rows = page.rows;
+      expect(
+        pageRowsPass(rows, const FilterItem(title: '秒杀', category: '豆瓣线报')),
+        isTrue,
+      );
+      expect(
+        pageRowsPass(rows, const FilterItem(title: '秒杀', category: '赚客吧')),
+        isFalse,
+      );
+    });
+
+    test('空规则表 → 整条丢（网站 if (!rows.length) return false）', () {
+      expect(pageRowsPass(const [], const FilterItem(title: '随便')), isFalse);
+    });
+  });
+
+  group('频道守卫与页面细分', () {
+    test('子频道按尾段平台过滤推送（cateid 与父频道相同）', () {
+      final guard = MetaFilterConfig.fromScript(
+        _haodanJdMeta,
+      ).page.channelGuard!;
+      expect(
+        channelGuardPass(
+          guard,
+          const FilterItem(category: '好单线报-食品-京东', cateId: 30),
+        ),
+        isTrue,
+      );
+      expect(
+        channelGuardPass(
+          guard,
+          const FilterItem(category: '好单线报-日用-淘宝', cateId: 30),
+        ),
+        isFalse,
+      );
+      expect(
+        channelGuardPass(
+          guard,
+          const FilterItem(category: '好单线报-日用-京东', cateId: 10),
+        ),
+        isFalse,
+      );
+    });
+
+    test('子频道页推送端到端：平台不符的好单推送不再插进京东页', () {
+      final meta = MetaFilterConfig.fromScript(_haodanJdMeta);
+      expect(
+        meta.keepsPush(
+          const FilterItem(title: '某商品', category: '好单线报-食品-京东', cateId: 30),
+        ),
+        isTrue,
+      );
+      expect(
+        meta.keepsPush(
+          const FilterItem(title: '某商品', category: '好单线报-日用-淘宝', cateId: 30),
+        ),
+        isFalse,
+      );
+    });
+
+    test('真实好单推送（20 条）：父频道不受平台限制，子频道只留京东 6 条', () {
+      final parent = MetaFilterConfig.fromScript(_haodanMeta);
+      final child = MetaFilterConfig.fromScript(_haodanJdMeta);
+      FilterItem item(String catename) =>
+          FilterItem(category: catename, cateId: 30);
+
+      expect(
+        _haodanFeedCatenames.where((c) => parent.keepsPush(item(c))).length,
+        20,
+      );
+      // 尾段是「京东」的 6 条；淘宝/其他活动/猫超那些不再混进京东子频道。
+      expect(
+        _haodanFeedCatenames.where((c) => child.keepsPush(item(c))).length,
+        6,
+      );
+    });
+  });
+
+  group('关注页与推送范围', () {
+    test('轮询开关没开时关注页推送一条都不插', () {
+      final meta = MetaFilterConfig.fromScript(_guestMeta);
+      expect(
+        meta.keepsPush(const FilterItem(title: '赚客吧线报', category: '赚客吧')),
+        isFalse,
+      );
+      // 主列表不受影响：游客那份 xb_config 是空对象。
+      expect(
+        meta.keepsListItem(
+          const FilterItem(title: '赚客吧线报', category: '赚客吧'),
+          kHomeScopes,
+        ),
+        isTrue,
+      );
+    });
+
+    test('分类页的空 token 范围只让 fanwei 留空的行生效', () {
+      const script =
+          r'''window.xb_global_filter={"status":1,"bankuai":[],"louzhuregtime":"","rows":[{"fanwei":"推送","title_gjc":"甲"},{"fanwei":"","title_gjc":"乙"}],"legacy":{"kw":0,"keywords":[],"fanwei":[]}};if (typeof xb_global_jsonfilter === "function") { xindata = xb_global_jsonfilter(xindata, ); }''';
+      final meta = MetaFilterConfig.fromScript(script);
+      expect(meta.pushScopes, <String>['']);
+      final titled = GlobalFilter.fromMetaScript(script);
+      // 空 token：只有 fanwei 留空的那一行参与 → 只有「乙」能过。
+      expect(
+        titled.keepsPushItem(const FilterItem(title: '含甲'), <String>['']),
+        isFalse,
+      );
+      expect(
+        titled.keepsPushItem(const FilterItem(title: '含乙'), <String>['']),
+        isTrue,
+      );
+      // 首页那份范围里带「推送」，两行都参与，行间 OR → 两条都过。
+      expect(
+        titled.keepsPushItem(const FilterItem(title: '含甲'), kHomePushScopes),
+        isTrue,
+      );
+    });
+  });
+
+  group('标题价格提取', () {
+    test('与 meta.php 的 IIFE 正则一致', () {
+      expect(priceFromTitle('乐百氏天然矿泉水360ml*24瓶 23.9元'), '23.9');
+      expect(priceFromTitle('到手价 ¥15 包邮'), '15');
+      expect(priceFromTitle('64 猫超 OffRelax蓬松洗发水660ml'), '');
+    });
+
+    test('只补空缺：data-price 已有就原样用', () {
+      const withPrice = FilterItem(title: '某商品 99元', price: '49');
+      expect(withPrice.withPriceFromTitle().price, '49');
+      const noPrice = FilterItem(title: '某商品 99元');
+      expect(noPrice.withPriceFromTitle().price, '99');
+    });
+
+    test('补出来的价格会被价格行用上（网站首页就是这么补的）', () {
+      const script =
+          r'''window.xb_global_filter={"status":1,"bankuai":[],"louzhuregtime":"","rows":[{"fanwei":"","Mxprice":"50"}],"legacy":{"kw":0,"keywords":[],"fanwei":[]}};''';
+      final meta = MetaFilterConfig.fromScript(script);
+      // meta 没有价格提取 IIFE → 不补价：无价条目放行（与网站 zdmserver 模式一致）。
+      expect(
+        meta.keepsListItem(const FilterItem(title: '某商品 99元'), kHomeScopes),
+        isTrue,
+      );
+      // 带上提取 IIFE 的页面才会补价，补完就被 Mxprice 拦掉。
+      final withExtraction = MetaFilterConfig.fromScript(
+        '${script}setAttribute("data-price", x);',
+      );
+      expect(
+        withExtraction.keepsListItem(
+          const FilterItem(title: '某商品 99元'),
+          kHomeScopes,
+        ),
+        isFalse,
+      );
+      expect(
+        withExtraction.keepsListItem(
+          const FilterItem(title: '某商品 30元'),
+          kHomeScopes,
+        ),
+        isTrue,
+      );
     });
   });
 }
