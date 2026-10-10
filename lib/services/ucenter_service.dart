@@ -128,7 +128,91 @@ class UcenterCheckInStatus {
   }
 }
 
-/// 规则行：网站 `userfilter_fun.php act=list` 的一行。///
+/// 一个筛选页的接口位置。
+///
+/// 网站各筛选页并不是同一个接口：首页/豆瓣/微博/好单/全局(服务端)/全局(用户端)
+/// 走 `userfilter_fun.php` 并用 `channel` 区分；**值得买监控词是独立端点
+/// `zhidemaifilter_fun.php`，且不带 channel**（带 channel 会被服务端拒为
+/// 「频道参数错误」）。排行榜单筛选不是规则行表格，是整表单页面，另用
+/// [UcenterSettingsSpec] 那一套处理。
+class UcenterFilterTarget {
+  /// `json/` 下的文件名。
+  final String endpoint;
+
+  /// 请求里的 channel；null = 该页不带这个参数。
+  final String? channel;
+
+  const UcenterFilterTarget(this.endpoint, this.channel);
+
+  static const UcenterFilterTarget shouye = UcenterFilterTarget(
+    'userfilter_fun.php',
+    'shouye',
+  );
+  static const UcenterFilterTarget douban = UcenterFilterTarget(
+    'userfilter_fun.php',
+    'douban',
+  );
+  static const UcenterFilterTarget weibo = UcenterFilterTarget(
+    'userfilter_fun.php',
+    'weibo',
+  );
+  static const UcenterFilterTarget haodan = UcenterFilterTarget(
+    'userfilter_fun.php',
+    'haodan',
+  );
+  static const UcenterFilterTarget global = UcenterFilterTarget(
+    'userfilter_fun.php',
+    'global',
+  );
+  static const UcenterFilterTarget globalFe = UcenterFilterTarget(
+    'userfilter_fun.php',
+    'globallist',
+  );
+
+  /// 我的关注三个位。
+  static const UcenterFilterTarget guanzhu1 = UcenterFilterTarget(
+    'userfilter_fun.php',
+    'guanzhu1',
+  );
+  static const UcenterFilterTarget guanzhu2 = UcenterFilterTarget(
+    'userfilter_fun.php',
+    'guanzhu2',
+  );
+  static const UcenterFilterTarget guanzhu3 = UcenterFilterTarget(
+    'userfilter_fun.php',
+    'guanzhu3',
+  );
+
+  /// 排行榜单筛选：整表单页面（`userfilter_fun.php` + channel=bangdan）。
+  static const UcenterFilterTarget bangdan = UcenterFilterTarget(
+    'userfilter_fun.php',
+    'bangdan',
+  );
+
+  /// 值得买监控词：独立端点，无 channel。
+  static const UcenterFilterTarget zhidemai = UcenterFilterTarget(
+    'zhidemaifilter_fun.php',
+    null,
+  );
+
+  /// 请求参数：`channel` 只在需要时带上。
+  Map<String, dynamic> params({
+    required String act,
+    String? id,
+    String? page,
+    String? limit,
+    bool withStatus = false,
+  }) => {
+    'act': act,
+    if (channel != null) 'channel': channel,
+    if (id != null) 'id': id,
+    if (page != null) 'page': page,
+    if (limit != null) 'limit': limit,
+  };
+}
+
+/// 规则行：网站 `userfilter_fun.php act=list` 的一行。
+///
 /// 行的字段与筛选引擎的规则行同构（`Status`/`fanwei`/八组词/价格），直接复用
 /// [FilterRule] 的解析；只有 id 是列表接口独有的。
 class UcenterRuleRow {
@@ -357,17 +441,14 @@ class UcenterService {
 
   // -------------------------------------------------------------- 规则行
 
-  /// 某个频道的规则行（我的关注三个位、各筛选页）。
-  Future<List<UcenterRuleRow>> fetchFilterRows(String channel) async {
+  /// 一个筛选页的规则行（我的关注三个位、各筛选频道）。
+  Future<List<UcenterRuleRow>> fetchFilterRows(UcenterFilterTarget target) async {
     final token = await _ensureCsrf();
     final body = await _client.postUcenterJson(
-      'userfilter_fun.php',
+      target.endpoint,
       data: {
         'csrfToken': token,
-        'act': 'list',
-        'channel': channel,
-        'page': '1',
-        'limit': '100',
+        ...target.params(act: 'list', page: '1', limit: '100'),
       },
     );
     final result = UcenterResult.fromText(body);
@@ -386,60 +467,106 @@ class UcenterService {
 
   /// 开关一条规则行。
   Future<UcenterResult> setFilterRowStatus({
-    required String channel,
+    required UcenterFilterTarget target,
     required String id,
     required bool enabled,
   }) => _postJson(
-    'userfilter_fun.php',
+    target.endpoint,
     data: {
-      'act': 'switchs',
-      'channel': channel,
-      'id': id,
+      ...target.params(act: 'switchs', id: id),
       'status': enabled ? 'true' : 'false',
     },
   );
 
   /// 删除一条规则行。
   Future<UcenterResult> deleteFilterRow({
-    required String channel,
+    required UcenterFilterTarget target,
     required String id,
   }) => _postJson(
-    'userfilter_fun.php',
-    data: {'act': 'deldata', 'channel': channel, 'id': id},
+    target.endpoint,
+    data: target.params(act: 'deldata', id: id),
   );
 
   /// 取规则编辑表单（`id` 为空表示新增）。
   ///
   /// 字段由服务端给，原生渲染后按同样的字段名回传，网站加字段也能跟上。
-  Future<UcenterForm> loadFilterEditorForm({
-    required String channel,
+  /// 规则行页会在进入页面时预取一次（见 `RuleRowsPage`），所以这里也是热路径。
+  Future<UcenterForm> loadFilterEditorForm(
+    UcenterFilterTarget target, {
     String id = '',
   }) async {
     final result = await _postJson(
-      'userfilter_fun.php',
-      data: {'act': 'edit_html', 'channel': channel, 'id': id},
+      target.endpoint,
+      data: target.params(act: 'edit_html', id: id),
     );
     if (!result.ok) {
       throw Exception(
         result.message.isEmpty ? '无法打开编辑表单' : result.message,
       );
     }
-    final html =
-        (jsonDecode(result.raw) as Map)['html']?.toString() ?? '';
+    final decoded = jsonDecode(result.raw);
+    final html = decoded is Map ? decoded['html']?.toString() ?? '' : '';
     final form = UcenterForm.parse(html);
     // 服务端片段里的令牌是随页面下发的，保存时以当前会话令牌为准。
     final token = await _ensureCsrf();
-    return form.withValues({'csrfToken': token, 'channel': channel});
+    return form.withValues({
+      'csrfToken': token,
+      if (target.channel != null) 'channel': target.channel!,
+    });
   }
 
   /// 保存规则行（字段即编辑表单回传的那些）。
   Future<UcenterResult> saveFilterRow({
-    required String channel,
+    required UcenterFilterTarget target,
     required Map<String, dynamic> fields,
   }) => _postJson(
-    'userfilter_fun.php',
-    data: {...fields, 'channel': channel},
+    target.endpoint,
+    data: {
+      ...fields,
+      if (target.channel != null) 'channel': target.channel!,
+    },
   );
+
+  /// 整表单式筛选页的保存（排行榜单筛选）。
+  ///
+  /// 该页不是规则行表格：一张表单里放当前这套配置，提交时整表序列化
+  /// （隐藏字段 act/channel/id/csrfToken 都在片段里）。保存成功后网站会再拉一次
+  /// `act=list` 把新行的 id 回写进表单，避免重复提交产生多行——App 同样照做。
+  Future<UcenterResult> saveFilterForm({
+    required UcenterFilterTarget target,
+    required Map<String, dynamic> fields,
+  }) => _postJson(
+    target.endpoint,
+    data: {
+      ...fields,
+      if (target.channel != null) 'channel': target.channel!,
+    },
+  );
+
+  /// 取某个整表单式筛选页的当前表单（字段与当前值都在视图片段里）。
+  Future<UcenterForm> fetchFilterForm({
+    required UcenterFilterTarget target,
+    required String view,
+  }) async {
+    final html = await fetchViewOrThrow(view);
+    final form = UcenterForm.parse(html);
+    final token = await _ensureCsrf();
+    return form.withValues({
+      'csrfToken': token,
+      if (target.channel != null) 'channel': target.channel!,
+    });
+  }
+
+  /// 读整表单式筛选页保存后的行 id（`act=list` 的第一行），用于回写表单。
+  Future<String?> fetchFilterFormRowId(UcenterFilterTarget target) async {
+    try {
+      final rows = await fetchFilterRows(target);
+      if (rows.isEmpty) return null;
+      return rows.first.id.isEmpty ? null : rows.first.id;
+    } catch (_) {
+      return null;
+    }
+  }
 
   // -------------------------------------------------------------- 设置表单
 
@@ -553,5 +680,11 @@ class UcenterService {
   Future<List<UcenterFragmentTable>> fetchFragmentTables(String view) async {
     final html = await fetchViewOrThrow(view);
     return parseFragmentTables(html);
+  }
+
+  /// 拉一个只读页面的「标签 + 值」列表（历史筛选数据）。
+  Future<List<UcenterReadonlyField>> fetchReadonlyFields(String view) async {
+    final html = await fetchViewOrThrow(view);
+    return parseReadonlyFields(html);
   }
 }

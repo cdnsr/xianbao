@@ -363,6 +363,26 @@ class FilterRule {
   bool get hasPriceBound =>
       _asNumber(minPrice) != null || _asNumber(maxPrice) != null;
 
+  /// 复制一份、只改启用状态（用户中心规则行列表就地翻转开关用）。
+  FilterRule copyWithEnabled(bool value) => FilterRule(
+    enabled: value,
+    scope: scope,
+    titleGjc: titleGjc,
+    titlePbc: titlePbc,
+    categoryGjc: categoryGjc,
+    categoryPbc: categoryPbc,
+    brandGjc: brandGjc,
+    brandPbc: brandPbc,
+    mallGjc: mallGjc,
+    mallPbc: mallPbc,
+    authorGjc: authorGjc,
+    authorPbc: authorPbc,
+    type: type,
+    mallName: mallName,
+    minPrice: minPrice,
+    maxPrice: maxPrice,
+  );
+
   /// `xb_row_scope_ok`：本行的 `fanwei` 是否覆盖这条分类名。
   ///
   /// 与全局筛选的板块 token 判定不是一回事——这里只做「任一 fanwei 词是

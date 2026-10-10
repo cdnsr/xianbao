@@ -467,12 +467,25 @@ savedate  : 保持天数（默认 30）
   启动时若已是登录态、以及登录成功后，各补当天这一签（先查状态，避免重复写）；成功不提示，
   只有失败才在屏幕中间弹一次 tip，且**同一天只弹一次**（详见
   `lib/services/check_in_service.dart`）。
-- 规则行（我的关注 3 个位 + 6 个筛选频道 + 全局服务端/用户端）：
-  `json/userfilter_fun.php`，`channel` ∈ `guanzhu1..3`/`shouye`/`douban`/`weibo`/`haodan`/
-  `zhidemai`/`bangdan`/`global`/`globallist`；act = `list`/`edit_html`/`switchs`/`deldata`/`selectdel`。
-  `edit_html` 返回**服务端渲染的表单**，App 解析字段后原生渲染并按原名回传。
-- 基本设置 6 页 + 商品转链 3 页：`POST json/shezhi_fun.php?type=<filter>&csrfToken=…`，
-  body 就是页面表单字段（`meta_*`）；当前值在对应 `views/Shezhi_*.php` 片段里。
+- 规则行与筛选页（**各页接口不一样，别照抄 channel**）：
+  - `POST json/userfilter_fun.php`，`channel` ∈ `guanzhu1..3`（我的关注① ② ③）/
+    `shouye`（首页）/`douban`/`weibo`/`haodan`/`global`（全局·服务端）/
+    `globallist`（全局·用户端）/`bangdan`（排行榜，**整表单页**）；
+    act = `list`/`edit_html`/`switchs`/`deldata`/`selectdel`/`edit_save`。
+  - **值得买监控词是独立端点** `POST json/zhidemaifilter_fun.php`（act 同上，但
+    **不带 channel**，带了会被服务端拒为「频道参数错误」）。
+  - **排行榜单筛选不是规则行表格**：一张表单铺当前配置，提交整表序列化
+    （隐藏字段 `act=edit_save`/`channel=bangdan`/`id`/`csrfToken` 在片段里）；
+    保存成功后网站会再拉一次 `act=list` 把新行 id 回写进表单，避免重复提交产生多行。
+  - `edit_html` 返回**服务端渲染的表单**，App 解析字段后原生渲染并按原名回传；
+    标签只取 `.layui-form-label` 的**直接文本**（网站把说明塞在标签内的 `<span>`
+    里，整段 text 会带出长说明），字段没有标签时退到 `title`/`placeholder`。
+- 基本设置 6 页 + 商品转链 3 页 + 排行榜单筛选：`POST json/shezhi_fun.php?type=<filter>
+  &csrfToken=…`（转链是 `zhuanlian_taobao|jingdong|pinduoduo`，排行榜单走
+  `userfilter_fun.php`），body 就是页面表单字段（`meta_*`）；当前值在对应
+  `views/*.php` 片段里。
+- 历史筛选数据查看（`views/Shaixuan_history.php`）：**只读**页，把旧配置按
+  「中文标签 + 小字键名 + 值」铺出来，没有提交入口；App 解析成原生只读列表并可复制。
 - 资料/头像/密码/绑定：`json/Get.php`，act = `postdata`（资料）/`UserImgList`+`UserImgSave`
   （头像）/`newpassword`（改密，字段 `pass`/`newpass`/`newpass_s`）/`bangemail_isemail`+
   `bangemail_vfcode`（绑邮箱）/`Jieemail_isemail`+`Jieemail_vfcode`（解绑）/`commDel`
@@ -490,11 +503,11 @@ Flutter 侧实现：`lib/services/ucenter_service.dart`（接口）、`lib/model
 ### 7.1 尚未原生化（下一轮）
 
 - **推送设置**：独立插件 `POST /zb_users/plugin/xbpush/api/channel.php`（act：`list`/`edit_save`/
-  `test`/`diagnose`/`preview`/`log_list`/`log_clear`/`rulestats`/`rsskey`/`import`…），19 种渠道
-- **商品转链**：`shezhi_fun.php`（`zhuanlian_taobao` / `zhuanlian_jingdong` / `zhuanlian_pinduoduo`）
-- 历史筛选数据查看（`views/Shaixuan_history.php`）
-
-这三块目前 App 内点开是用系统浏览器打开网站页面。
+  `test`/`diagnose`/`preview`/`log_list`/`log_clear`/`rulestats`/`rsskey`/`import`…），19 种渠道。
+  目前 App 内用**内置页面查看器**（`UcenterViewPage`，加载前把 Cookie 同步进 WebView）
+  打开，不再跳浏览器。
+- 支付类（积分充值、购买会员）与注册 / 忘记密码 / 微信 / QQ 绑定：仍需第三方流程，
+  仍用系统浏览器打开。
 
 ### 8. 搜索
 

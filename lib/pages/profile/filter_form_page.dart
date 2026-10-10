@@ -6,55 +6,36 @@ import '../../utils/error_message.dart';
 import '../../widgets/load_error_view.dart';
 import '../../widgets/ucenter_form_view.dart';
 
-/// 打开规则行编辑页；返回 true 表示已保存。
+/// 整表单式筛选页（排行榜单筛选）。
 ///
-/// [prefetchedForm] 是列表页提前取好的表单（新增场景），有大就直接用，省一次往返。
-Future<bool> showRuleEditor(
-  BuildContext context, {
-  required UcenterFilterTarget target,
-  required String title,
-  String id = '',
-  UcenterForm? prefetchedForm,
-}) async {
-  final saved = await Navigator.push<bool>(
-    context,
-    MaterialPageRoute(
-      builder: (_) => RuleEditorPage(
-        target: target,
-        title: title,
-        id: id,
-        prefetchedForm: prefetchedForm,
-      ),
-    ),
-  );
-  return saved == true;
-}
-
-/// 规则行编辑页。
+/// 这一页在网站上不是规则行表格，而是一张表单：当前这套配置直接铺在表单里，提交时
+/// 整表序列化（隐藏字段 `act`/`channel`/`id`/`csrfToken` 都在片段里）。字段与当前值
+/// 都从对应视图片段解析，保存走 `userfilter_fun.php`。
 ///
-/// 表单字段由服务端下发（`userfilter_fun.php act=edit_html`），这里按字段类型原生
-/// 渲染、按原名回传，网站加字段/改限额都能跟上；服务端的校验消息原样展示。
-class RuleEditorPage extends StatefulWidget {
+/// 保存成功后网站会再拉一次 `act=list` 把新行的 id 回写进表单，避免重复提交产生多行；
+/// 这里同样照做。
+class FilterFormPage extends StatefulWidget {
   final UcenterFilterTarget target;
+
+  /// `views/<view>.php`。
+  final String view;
+
   final String title;
-  final String id;
+  final String hint;
 
-  /// 列表页预取好的表单（新增场景）。
-  final UcenterForm? prefetchedForm;
-
-  const RuleEditorPage({
+  const FilterFormPage({
     super.key,
     required this.target,
+    required this.view,
     required this.title,
-    this.id = '',
-    this.prefetchedForm,
+    this.hint = '',
   });
 
   @override
-  State<RuleEditorPage> createState() => _RuleEditorPageState();
+  State<FilterFormPage> createState() => _FilterFormPageState();
 }
 
-class _RuleEditorPageState extends State<RuleEditorPage> {
+class _FilterFormPageState extends State<FilterFormPage> {
   final UcenterService _service = UcenterService();
   final GlobalKey<UcenterFormViewState> _formKey =
       GlobalKey<UcenterFormViewState>();
@@ -71,23 +52,14 @@ class _RuleEditorPageState extends State<RuleEditorPage> {
   }
 
   Future<void> _load() async {
-    // 列表页预取过的表单直接用（新增入口的常见路径），其余情况现取。
-    final prefetched = widget.prefetchedForm;
-    if (prefetched != null && widget.id.isEmpty) {
-      setState(() {
-        _form = prefetched;
-        _loading = false;
-      });
-      return;
-    }
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
-      final form = await _service.loadFilterEditorForm(
-        widget.target,
-        id: widget.id,
+      final form = await _service.fetchFilterForm(
+        target: widget.target,
+        view: widget.view,
       );
       if (!mounted) return;
       setState(() {
@@ -107,28 +79,35 @@ class _RuleEditorPageState extends State<RuleEditorPage> {
     final form = _form;
     final viewState = _formKey.currentState;
     if (form == null || viewState == null || _saving) return;
-    setState(() => _saving = true);
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
     try {
-      final result = await _service.saveFilterRow(
+      final result = await _service.saveFilterForm(
         target: widget.target,
         fields: form.withValues(viewState.values).toFormData(),
       );
       if (!mounted) return;
       setState(() => _saving = false);
-      if (result.ok) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(result.message.isEmpty ? '已保存' : result.message),
-          ),
-        );
-        Navigator.pop(context, true);
-        return;
-      }
-      final message = result.message.isEmpty ? '保存失败' : result.message;
-      setState(() => _error = message);
+
+      final message = result.message.isNotEmpty
+          ? result.message
+          : (result.ok ? '已保存' : '保存失败');
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(message)));
+      if (!result.ok) {
+        setState(() => _error = message);
+        return;
+      }
+
+      // 新配置首次保存会新建一行，把 id 回写进表单，避免下次保存再多出一行。
+      final rowId = await _service.fetchFilterFormRowId(widget.target);
+      if (!mounted) return;
+      if (rowId != null && rowId.isNotEmpty) {
+        setState(() => _form = form.withValues({'id': rowId}));
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -142,12 +121,7 @@ class _RuleEditorPageState extends State<RuleEditorPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(
-        title: Text(
-          widget.id.isEmpty ? '新增规则 · ${widget.title}' : '编辑规则 · ${widget.title}',
-        ),
-        centerTitle: true,
-      ),
+      appBar: AppBar(title: Text(widget.title), centerTitle: true),
       body: _buildBody(theme),
       bottomNavigationBar: _form == null
           ? null
@@ -173,12 +147,23 @@ class _RuleEditorPageState extends State<RuleEditorPage> {
     if (_loading) return const Center(child: CircularProgressIndicator());
     final form = _form;
     if (form == null) {
-      return LoadErrorView(message: _error ?? '无法加载编辑表单', onRetry: _load);
+      return LoadErrorView(message: _error ?? '加载失败', onRetry: _load);
     }
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
       children: [
+        if (widget.hint.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Text(
+              widget.hint,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+                height: 1.5,
+              ),
+            ),
+          ),
         if (form.message.isNotEmpty)
           Container(
             width: double.infinity,
@@ -192,6 +177,7 @@ class _RuleEditorPageState extends State<RuleEditorPage> {
               form.message,
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
+                height: 1.6,
               ),
             ),
           ),

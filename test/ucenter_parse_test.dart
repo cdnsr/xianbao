@@ -147,6 +147,54 @@ const String _liushuiFragment = r'''
 </div>
 ''';
 
+
+/// 排行榜单筛选（`views/bangdanfilter.php`）：整表单页面，标签里带说明 span。
+const String _bangdanFormFragment = r"""
+<form id="bangdan_form" class="layui-form">
+  <input type="hidden" name="act" value="edit_save" />
+  <input type="hidden" name="channel" value="bangdan" />
+  <input type="hidden" name="id" value="" />
+  <input type="hidden" name="csrfToken" value="CSRFTOKENPLACEHOLDER" />
+  <div class="layui-form-item">
+    <label class="layui-form-label">启用<span class="uf-sub">关掉后本页规则不生效</span></label>
+    <div class="layui-input-block"><input type="checkbox" name="Status" value="1" lay-skin="switch" checked></div>
+  </div>
+  <div class="layui-form-item layui-form-text">
+    <label class="layui-form-label">分类关键词<span class="uf-sub">选填 · 作用于线报分类名，配置后仅展示命中的分类</span></label>
+    <div class="layui-input-block"><textarea name="category_gjc" placeholder="多个词用 # 分隔"></textarea></div>
+  </div>
+  <div class="layui-form-item layui-form-text">
+    <label class="layui-form-label">分类屏蔽词<span class="uf-sub">选填</span></label>
+    <div class="layui-input-block"><textarea name="category_pbc"></textarea></div>
+  </div>
+  <div class="layui-form-item layui-form-text">
+    <label class="layui-form-label">标题关键词<span class="uf-sub">选填</span></label>
+    <div class="layui-input-block"><textarea name="title_gjc">元|羊毛</textarea></div>
+  </div>
+  <div class="layui-form-item layui-form-text">
+    <div class="layui-input-block"><textarea name="title_pbc" placeholder="屏蔽词"></textarea></div>
+  </div>
+</form>
+""";
+
+/// 历史筛选数据（只读页）：标签 + 小字键名 + 值。
+const String _historyFragment = r"""
+<div class="layui-fluid">
+  <div class="layui-form-item">
+    <label class="layui-form-label xsb-form-label">旧全局屏蔽开关<br><span class="xsb-keyname">pingbi_global_switch</span></label>
+    <div class="layui-input-block xsb-input-block"><input type="text" value="1" readonly></div>
+  </div>
+  <div class="layui-form-item">
+    <label class="layui-form-label xsb-form-label">旧全局屏蔽词<br><span class="xsb-keyname">pingbi_global</span></label>
+    <div class="layui-input-block xsb-input-block">抽奖#开奖</div>
+  </div>
+  <div class="layui-form-item">
+    <label class="layui-form-label xsb-form-label">旧关注词</label>
+    <div class="layui-input-block xsb-input-block"></div>
+  </div>
+</div>
+""";
+
 void main() {
   group('UcenterHome.parse', () {
     test('四张统计卡片与公告', () {
@@ -340,6 +388,71 @@ void main() {
 
     test('没有表格的片段返回空表', () {
       expect(parseFragmentTables('<div>没有表格</div>'), isEmpty);
+    });
+  });
+
+
+  group('UcenterFilterTarget（各筛选页的接口位置）', () {
+    test('常规频道带 channel，值得买是独立端点且不带 channel', () {
+      final shouye = UcenterFilterTarget.shouye.params(act: 'list');
+      expect(shouye['channel'], 'shouye');
+      expect(shouye['act'], 'list');
+
+      final zhidemai = UcenterFilterTarget.zhidemai.params(act: 'list');
+      expect(zhidemai.containsKey('channel'), isFalse);
+      expect(UcenterFilterTarget.zhidemai.endpoint, 'zhidemaifilter_fun.php');
+
+      // 带 id / 分页时也照常拼参数。
+      final withId = UcenterFilterTarget.haodan.params(
+        act: 'deldata',
+        id: '42',
+      );
+      expect(withId, {'act': 'deldata', 'channel': 'haodan', 'id': '42'});
+    });
+  });
+
+  group('排行榜单筛选（整表单页）', () {
+    test('解析出表单字段，标签只取直接文本（不含说明 span）', () {
+      final form = UcenterForm.parse(_bangdanFormFragment);
+      final byName = {for (final f in form.fields) f.name: f};
+      expect(byName['Status']!.label, '启用');
+      expect(byName['category_gjc']!.label, '分类关键词');
+      expect(byName['category_pbc']!.label, '分类屏蔽词');
+      expect(byName['title_gjc']!.label, '标题关键词');
+      expect(byName['title_gjc']!.value, '元|羊毛');
+      expect(byName['channel']!.value, 'bangdan');
+    });
+
+    test('没有标签的字段用占位文案兜底，而不是露出英文名', () {
+      final form = UcenterForm.parse(_bangdanFormFragment);
+      final titlePbc = form.fields.firstWhere((f) => f.name == 'title_pbc');
+      expect(titlePbc.label, '屏蔽词');
+      // 标签不会是字段名本身。
+      expect(titlePbc.label, isNot('title_pbc'));
+    });
+
+    test('回传时带隐藏字段（act/channel/id），未勾选的开关不出现', () {
+      final form = UcenterForm.parse(_bangdanFormFragment);
+      final data = form.toFormData();
+      expect(data['act'], 'edit_save');
+      expect(data['channel'], 'bangdan');
+      expect(data['Status'], '1');
+      expect(form.withValues({'Status': ''}).toFormData().containsKey('Status'), isFalse);
+    });
+  });
+
+  group('parseReadonlyFields（历史筛选数据）', () {
+    test('解析标签、旧键名与值', () {
+      final fields = parseReadonlyFields(_historyFragment);
+      expect(fields.length, 3);
+      expect(fields[0].label, '旧全局屏蔽开关');
+      expect(fields[0].key, 'pingbi_global_switch');
+      expect(fields[0].value, '1');
+      expect(fields[1].label, '旧全局屏蔽词');
+      expect(fields[1].value, '抽奖#开奖');
+      // 空值条目也保留（页面显示为空），由页面过滤。
+      expect(fields[2].value, '');
+      expect(fields[2].isEmpty, isTrue);
     });
   });
 

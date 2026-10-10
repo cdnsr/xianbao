@@ -15,12 +15,18 @@ class UcenterSettingsSpec {
   final String type;
 
   final String title;
+
+  /// 入口页里的一行说明。
+  final String description;
+
+  /// 表单页顶部的说明（限额、生效范围等）。
   final String hint;
 
   const UcenterSettingsSpec({
     required this.view,
     required this.type,
     required this.title,
+    this.description = '',
     this.hint = '',
   });
 }
@@ -34,39 +40,82 @@ const Map<String, UcenterSettingsSpec> ucenterSettingsSpecs = {
     view: 'Shezhi_jiben',
     type: 'jiben_liulan',
     title: '优化浏览设置',
+    description: '标题标红、分页方式、新标签页',
     hint: '标题标红、分页方式、新标签页行为。',
   ),
   'shishi': UcenterSettingsSpec(
     view: 'Shezhi_shishi',
     type: 'shishi',
     title: '实时线报设置',
+    description: '列表自动刷新的开关与间隔',
     hint: '列表自动刷新的请求开关与间隔（单位秒，3-3600）。',
   ),
   'daohang': UcenterSettingsSpec(
     view: 'Shezhi_daohang',
     type: 'jiben_daohang',
     title: '顶部导航设置',
+    description: '电脑端 / 手机端顶部导航',
     hint: '系统默认 / 自定义 / 关闭，电脑端与手机端可分别设置。',
   ),
   'moyu': UcenterSettingsSpec(
     view: 'Shezhi_moyu',
     type: 'jiben_moyu',
     title: '优化摸鱼设置',
+    description: '伪装标题、图标与轮换',
     hint: '伪装标题、图标与轮换间隔，生效设备可分别选择。',
   ),
   'css': UcenterSettingsSpec(
     view: 'Shezhi_css',
     type: 'jiben_css',
     title: '自定义 CSS 样式',
+    description: '自定义 CSS 样式',
     hint: '只对你自己的浏览器生效。',
   ),
   'js': UcenterSettingsSpec(
     view: 'Shezhi_js',
     type: 'jiben_js',
     title: '自定义 JS 脚本',
+    description: '自定义 JS 脚本',
     hint: '只对你自己的浏览器生效，请谨慎填写。',
   ),
+  // 商品转链（与基本设置同一套 shezhi_fun.php 表单，只是字段是各平台的密钥与格式）
+  'zhuanlian_taobao': UcenterSettingsSpec(
+    view: 'Shezhi_zhuanlian',
+    type: 'zhuanlian_taobao',
+    title: '淘宝转链设置',
+    description: 'AppKey / AppSecret / PID 与链接格式',
+    hint: '商品与活动链接的模板里可用 {链接}、{标题} 等占位符，具体见网站对应页面说明。',
+  ),
+  'zhuanlian_jingdong': UcenterSettingsSpec(
+    view: 'ZhuanlianJd',
+    type: 'zhuanlian_jingdong',
+    title: '京东转链设置',
+    description: '联盟 unionId / positionId 与链接格式',
+  ),
+  'zhuanlian_pinduoduo': UcenterSettingsSpec(
+    view: 'ZhuanlianPdd',
+    type: 'zhuanlian_pinduoduo',
+    title: '拼多多转链设置',
+    description: 'AppKey / AppSecret / PID 与链接格式',
+  ),
 };
+
+/// 基本设置（鼠标悬停即可看到的说明见各 spec.description）。
+const List<String> ucenterBasicSettingsKeys = [
+  'jiben',
+  'shishi',
+  'daohang',
+  'moyu',
+  'css',
+  'js',
+];
+
+/// 商品转链的三个平台。
+const List<String> ucenterTransferKeys = [
+  'zhuanlian_taobao',
+  'zhuanlian_jingdong',
+  'zhuanlian_pinduoduo',
+];
 
 /// 基本设置表单页。
 class SettingsFormPage extends StatefulWidget {

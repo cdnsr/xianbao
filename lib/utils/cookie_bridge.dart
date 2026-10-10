@@ -1,20 +1,19 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import '../services/http_client.dart';
 import 'cookie_header_codec.dart';
 
-/// One-time migration of the session cookies old app versions left behind in
-/// the WebView's cookie store.
+/// 桥接 Dio 的 Cookie 与 WebView 的 Cookie 存储。
 ///
-/// Login and the user center used to run inside a WebView; the session lived in
-/// the platform cookie store and was copied into Dio on every page load. Both
-/// pages are native now, so [HttpClient]'s jar is the only source of truth and
-/// it persists itself (see `HttpClient.configureCookieStore`).
+/// 登录与用户中心已经是原生页面，会话由 [HttpClient] 的持久化 jar 承载
+/// （见 `HttpClient.configureCookieStore`），这个类现在只剩两件事：
 ///
-/// This class therefore only does the upgrade dance: on first launch after the
-/// upgrade, copy whatever WebView still holds into the jar so the user is not
-/// forced to log in again. Reading the platform store usually works without a
-/// WebView widget, but any failure is non-fatal — the user just logs in again.
+///  - [migrateFromWebView]：升级后首次启动时，把老版本留在 WebView 里的登录
+///    Cookie 搬进 jar，用户不用重新登录（读平台存储一般不需要 WebView 实例，
+///    失败也不影响使用）；
+///  - [syncToWebView]：App 内的页面查看器（[UcenterViewPage]，目前用于推送设置）
+///    加载网站页面之前，把 jar 里的 Cookie 写进 WebView，否则会以未登录打开。
 class CookieBridge {
   static final WebViewCookieManager _cookieManager = WebViewCookieManager();
 
@@ -48,12 +47,38 @@ class CookieBridge {
     return 0;
   }
 
+  /// Copies the app's current cookies into the WebView cookie store.
+  ///
+  /// Only used by the in-app viewer for pages that are still the website's own
+  /// (推送设置 lives in the separate xbpush plugin). The session lives in Dio's
+  /// jar now, so a WebView would otherwise load logged-out.
+  static Future<int> syncToWebView() async {
+    try {
+      final uri = Uri.parse(HttpClient.baseUrl);
+      final cookies = await HttpClient().cookieJar.loadForRequest(uri);
+      for (final cookie in cookies) {
+        if (!CookieHeaderCodec.isValidPair(cookie.name, cookie.value)) continue;
+        await _cookieManager.setCookie(
+          WebViewCookie(
+            name: cookie.name,
+            value: cookie.value,
+            domain: cookie.domain ?? uri.host,
+            path: cookie.path ?? '/',
+          ),
+        );
+      }
+      return cookies.length;
+    } catch (e) {
+      debugPrint('CookieBridge.syncToWebView failed: $e');
+      return 0;
+    }
+  }
+
   static List<Cookie> _toIoCookies(
     List<WebViewCookie> cookies,
     Uri requestUri, {
     String? domainOverride,
-  }) {
-    final result = <Cookie>[];
+  }) {    final result = <Cookie>[];
     for (final source in cookies) {
       if (!CookieHeaderCodec.isValidPair(source.name, source.value)) continue;
       final cookie = Cookie(source.name, source.value)

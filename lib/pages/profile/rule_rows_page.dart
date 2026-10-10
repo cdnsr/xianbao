@@ -1,16 +1,22 @@
 import 'package:flutter/material.dart';
 
+import '../../models/ucenter_form.dart';
 import '../../services/ucenter_service.dart';
 import '../../utils/error_message.dart';
 import '../../widgets/load_error_view.dart';
 import 'rule_editor_sheet.dart';
 
-/// 一个频道的规则行列表（我的关注三个位、各筛选页共用）。
+/// 一个筛选页的规则行列表（我的关注三个位、各筛选频道共用）。
 ///
-/// 数据来自 `userfilter_fun.php act=list`：开关、范围、八组词与价格区间；开关走
-/// `switchs`，删除走 `deldata`，编辑/新增打开服务端下发的表单（[showRuleEditor]）。
+/// 数据来自该页对应的 `act=list`：开关、范围、八组词与价格区间；开关走 `switchs`，
+/// 删除走 `deldata`，编辑/新增用服务端下发的表单（[showRuleEditor]）。
+///
+/// 响应速度上做了三件事（这些接口都在站内、每次往返几百毫秒起）：
+///  - 开关与删除**就地更新**，不再整页重拉；
+///  - 进入页面时**预取**新增用的表单，点「+」可以秒开；
+///  - 保存返回后先关掉编辑页，再在后台静默刷新列表（不闪整页 loading）。
 class RuleRowsPage extends StatefulWidget {
-  final String channel;
+  final UcenterFilterTarget target;
   final String title;
 
   /// 页面顶部的说明（限额、生效范围等），空则不显示。
@@ -18,7 +24,7 @@ class RuleRowsPage extends StatefulWidget {
 
   const RuleRowsPage({
     super.key,
-    required this.channel,
+    required this.target,
     required this.title,
     this.hint = '',
   });
@@ -35,54 +41,98 @@ class _RuleRowsPageState extends State<RuleRowsPage> {
   String? _error;
   final Set<String> _busyIds = {};
 
+  /// 预取的新增表单（进入页面时后台拉一次）。
+  UcenterForm? _newRowForm;
+  bool _prefetching = false;
+
   @override
   void initState() {
     super.initState();
     _load();
+    _prefetchEditorForm();
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  /// 提前把「新增」用的表单取回来，点 + 时直接打开。
+  Future<void> _prefetchEditorForm() async {
+    if (_prefetching) return;
+    _prefetching = true;
     try {
-      final rows = await _service.fetchFilterRows(widget.channel);
+      final form = await _service.loadFilterEditorForm(widget.target);
+      if (!mounted) return;
+      setState(() => _newRowForm = form);
+    } catch (_) {
+      // 预取失败不影响使用：点「+」时会再拉一次并给出提示。
+    } finally {
+      _prefetching = false;
+    }
+  }
+
+  /// [silent] 为真时不显示整页 loading（用于操作后的后台刷新）。
+  Future<void> _load({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+    try {
+      final rows = await _service.fetchFilterRows(widget.target);
       if (!mounted) return;
       setState(() {
         _rows = rows;
         _loading = false;
+        _error = null;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = friendlyErrorMessage(e);
+        if (!silent) _error = friendlyErrorMessage(e);
       });
     }
   }
 
   Future<void> _toggle(UcenterRuleRow row, bool enabled) async {
     setState(() => _busyIds.add(row.id));
+    // 先就地翻转开关，请求在后台跑；失败再翻回来。
+    _replaceRow(row.id, enabled: enabled);
     try {
       final result = await _service.setFilterRowStatus(
-        channel: widget.channel,
+        target: widget.target,
         id: row.id,
         enabled: enabled,
       );
       if (!mounted) return;
-      _showMessage(
-        result.message.isNotEmpty
-            ? result.message
-            : (result.ok ? '已更新' : '更新失败'),
-      );
-      if (result.ok) await _load();
+      if (!result.ok) {
+        _replaceRow(row.id, enabled: row.rule.enabled);
+        _showMessage(
+          result.message.isEmpty ? '更新失败' : result.message,
+        );
+      }
     } catch (e) {
       if (!mounted) return;
+      _replaceRow(row.id, enabled: row.rule.enabled);
       _showMessage(friendlyErrorMessage(e));
     } finally {
       if (mounted) setState(() => _busyIds.remove(row.id));
     }
+  }
+
+  /// 就地更新一行的开关状态（不重拉列表）。
+  void _replaceRow(String id, {required bool enabled}) {
+    if (!mounted) return;
+    setState(() {
+      _rows = _rows
+          .map(
+            (row) => row.id == id
+                ? UcenterRuleRow(
+                    id: row.id,
+                    rule: row.rule.copyWithEnabled(enabled),
+                  )
+                : row,
+          )
+          .toList();
+    });
   }
 
   Future<void> _delete(UcenterRuleRow row) async {
@@ -105,20 +155,26 @@ class _RuleRowsPageState extends State<RuleRowsPage> {
     );
     if (confirmed != true) return;
 
+    // 先移除，请求失败再把整表拉回来。
+    final backup = _rows;
+    setState(() {
+      _rows = _rows.where((r) => r.id != row.id).toList();
+    });
     try {
       final result = await _service.deleteFilterRow(
-        channel: widget.channel,
+        target: widget.target,
         id: row.id,
       );
       if (!mounted) return;
-      _showMessage(
-        result.message.isNotEmpty
-            ? result.message
-            : (result.ok ? '已删除' : '删除失败'),
-      );
-      if (result.ok) await _load();
+      if (!result.ok) {
+        setState(() => _rows = backup);
+        _showMessage(result.message.isEmpty ? '删除失败' : result.message);
+        return;
+      }
+      _showMessage(result.message.isEmpty ? '已删除' : result.message);
     } catch (e) {
       if (!mounted) return;
+      setState(() => _rows = backup);
       _showMessage(friendlyErrorMessage(e));
     }
   }
@@ -126,11 +182,17 @@ class _RuleRowsPageState extends State<RuleRowsPage> {
   Future<void> _edit(UcenterRuleRow? row) async {
     final saved = await showRuleEditor(
       context,
-      channel: widget.channel,
+      target: widget.target,
       title: widget.title,
       id: row?.id ?? '',
+      // 新增时用预取好的表单（编辑单据的另取，避免拿到旧值）。
+      prefetchedForm: row == null ? _newRowForm : null,
     );
-    if (saved && mounted) await _load();
+    if (!saved || !mounted) return;
+    // 新行的表单已经用掉了，重新预取一份；顺带静默刷新列表。
+    setState(() => _newRowForm = null);
+    await _load(silent: true);
+    _prefetchEditorForm();
   }
 
   void _showMessage(String message) {
@@ -157,7 +219,7 @@ class _RuleRowsPageState extends State<RuleRowsPage> {
         ],
       ),
       body: RefreshIndicator(
-        onRefresh: _load,
+        onRefresh: () => _load(),
         child: _buildBody(theme),
       ),
     );
@@ -171,7 +233,7 @@ class _RuleRowsPageState extends State<RuleRowsPage> {
         children: [
           SizedBox(
             height: MediaQuery.of(context).size.height * 0.6,
-            child: LoadErrorView(message: _error!, onRetry: _load),
+            child: LoadErrorView(message: _error!, onRetry: () => _load()),
           ),
         ],
       );
@@ -232,8 +294,14 @@ class _RuleRowsPageState extends State<RuleRowsPage> {
       if (rule.categoryGjc.trim().isNotEmpty) '分类词：${rule.categoryGjc.trim()}',
       if (rule.categoryPbc.trim().isNotEmpty)
         '分类屏蔽：${rule.categoryPbc.trim()}',
+      if (rule.mallGjc.trim().isNotEmpty) '商城词：${rule.mallGjc.trim()}',
+      if (rule.mallPbc.trim().isNotEmpty) '商城屏蔽：${rule.mallPbc.trim()}',
+      if (rule.mallName.trim().isNotEmpty) '商城名：${rule.mallName.trim()}',
+      if (rule.brandGjc.trim().isNotEmpty) '品牌词：${rule.brandGjc.trim()}',
+      if (rule.brandPbc.trim().isNotEmpty) '品牌屏蔽：${rule.brandPbc.trim()}',
       if (rule.authorGjc.trim().isNotEmpty) '楼主词：${rule.authorGjc.trim()}',
       if (rule.authorPbc.trim().isNotEmpty) '楼主屏蔽：${rule.authorPbc.trim()}',
+      if (rule.type.trim().isNotEmpty) '类型：${rule.type.trim()}',
       if (rule.minPrice.trim().isNotEmpty || rule.maxPrice.trim().isNotEmpty)
         '价格：${rule.minPrice.trim().isEmpty ? '不限' : rule.minPrice.trim()}'
             ' - ${rule.maxPrice.trim().isEmpty ? '不限' : rule.maxPrice.trim()}',
@@ -259,10 +327,13 @@ class _RuleRowsPageState extends State<RuleRowsPage> {
                 ),
               ),
               if (busy)
-                const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 12),
+                  child: SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
                 )
               else
                 Switch(

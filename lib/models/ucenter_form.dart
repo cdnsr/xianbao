@@ -219,7 +219,7 @@ class UcenterForm {
 
     final visited = <dom.Element>{};
     for (final item in document.querySelectorAll('.layui-form-item')) {
-      final label = item.querySelector('.layui-form-label')?.text.trim() ?? '';
+      final label = _labelTextOf(item);
       for (final element in item.querySelectorAll('input,textarea,select')) {
         visited.add(element);
         final field = _fieldFromElement(element, label);
@@ -241,9 +241,58 @@ class UcenterForm {
   }
 }
 
-UcenterFormField? _fieldFromElement(dom.Element element, String label) {
+/// 取表单项的标签文案。
+///
+/// 只取标签元素的**直接文本**：网站常把说明塞在标签里的 `<span>` 中
+/// （`分类关键词<span class="uf-sub">选填 · 作用于分类名</span>`），
+/// 整段 text 会把说明一起带上，标题就变得又长又乱。
+/// 依次尝试 `.layui-form-label` → 任意 `label` → `legend`/`cite`。
+String _labelTextOf(dom.Element item) {
+  for (final selector in const [
+    '.layui-form-label',
+    'label',
+    'legend',
+    'cite',
+  ]) {
+    final element = item.querySelector(selector);
+    if (element == null) continue;
+    final text = _directText(element);
+    if (text.isNotEmpty) return text;
+  }
+  return '';
+}
+
+/// 元素自身文本（不含子元素的文本），用于取干净的标签。
+String _directText(dom.Element element) {
+  final buffer = StringBuffer();
+  for (final node in element.nodes) {
+    if (node.nodeType == dom.Node.TEXT_NODE) {
+      buffer.write(node.text);
+    }
+  }
+  final text = buffer.toString().replaceAll(RegExp(r'\s+'), ' ').trim();
+  if (text.isNotEmpty) return text;
+  // 标签全被包在子元素里时退一步用整段文本（并压掉多余空白）。
+  return element.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+}
+
+/// 字段没有标签时的兜底名：`title` / `placeholder` / 原始 name。
+String _fallbackLabel(dom.Element element, String name) {
+  final title = element.attributes['title']?.trim() ?? '';
+  if (title.isNotEmpty) return title;
+  final placeholder = element.attributes['placeholder']?.trim() ?? '';
+  if (placeholder.isNotEmpty) {
+    // 占位文案常常很长（说明性文字），截断到第一个分隔符/一定长度。
+    final short = placeholder.split(RegExp(r'[，,。（(]')).first.trim();
+    return short.isEmpty ? name : (short.length > 16 ? name : short);
+  }
+  return name;
+}
+
+UcenterFormField? _fieldFromElement(dom.Element element, String rawLabel) {
   final name = element.attributes['name']?.trim() ?? '';
   if (name.isEmpty) return null;
+  final label = rawLabel.isNotEmpty ? rawLabel : _fallbackLabel(element, name);
   final type = (element.attributes['type'] ?? '').toLowerCase();
   final disabled = element.attributes.containsKey('disabled');
   final required = element.attributes.containsKey('required');
@@ -392,4 +441,64 @@ Map<String, String> readValues(String html, Iterable<String> names) {
     }
   }
   return values;
+}
+
+/// 只读页面上的一条「标签 + 值」（历史筛选数据这类没有表单提交的页面）。
+class UcenterReadonlyField {
+  /// 中文标签。
+  final String label;
+
+  /// 旧配置键（页面上的小字，如 `pingbi_global_switch`），可能为空。
+  final String key;
+
+  final String value;
+
+  const UcenterReadonlyField({
+    required this.label,
+    this.key = '',
+    this.value = '',
+  });
+
+  bool get isEmpty => value.isEmpty;
+}
+
+/// 解析只读页面里的「标签 + 值」列表（`views/Shaixuan_history.php`）。
+///
+/// 这类页面把旧配置按 `标签 + 小字键名 + 值` 铺出来，没有提交按钮也没有接口，
+/// 直接解析成原生只读列表展示。
+List<UcenterReadonlyField> parseReadonlyFields(String html) {
+  final document = html_parser.parse(html);
+  final fields = <UcenterReadonlyField>[];
+
+  for (final item in document.querySelectorAll('.layui-form-item')) {
+    final labelEl = item.querySelector('.layui-form-label');
+    final label = labelEl == null ? '' : _directText(labelEl);
+    final key = labelEl?.querySelector('.xsb-keyname')?.text.trim() ?? '';
+
+    var value = '';
+    final input = item.querySelector('input,textarea,select');
+    if (input != null) {
+      if (input.localName == 'textarea') {
+        value = input.text.trim();
+      } else if (input.localName == 'select') {
+        value = input.querySelector('option[selected]')?.text.trim() ?? '';
+      } else {
+        value = input.attributes['value']?.trim() ?? '';
+      }
+    }
+    if (value.isEmpty) {
+      final block = item.querySelector('.layui-input-block') ?? item;
+      value = block.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+      // 标签与小字键名已经单独展示了，从值里剥掉，免得重复。
+      for (final prefix in [label, key]) {
+        if (prefix.isNotEmpty && value.startsWith(prefix)) {
+          value = value.substring(prefix.length).trim();
+        }
+      }
+    }
+
+    if (label.isEmpty && key.isEmpty && value.isEmpty) continue;
+    fields.add(UcenterReadonlyField(label: label, key: key, value: value));
+  }
+  return fields;
 }

@@ -1,15 +1,16 @@
 import 'package:flutter/material.dart';
 
+import '../../services/ucenter_service.dart';
 import 'rule_rows_page.dart';
 
 /// 我的关注：三个关注位各自的规则行（网站 `Shezhi_guanzhu` 的三个页签）。
 class FollowSettingsPage extends StatelessWidget {
   const FollowSettingsPage({super.key});
 
-  static const List<({String channel, String title})> _slots = [
-    (channel: 'guanzhu1', title: '我的关注①'),
-    (channel: 'guanzhu2', title: '我的关注②'),
-    (channel: 'guanzhu3', title: '我的关注③'),
+  static const List<({UcenterFilterTarget target, String title})> _slots = [
+    (target: UcenterFilterTarget.guanzhu1, title: '我的关注①'),
+    (target: UcenterFilterTarget.guanzhu2, title: '我的关注②'),
+    (target: UcenterFilterTarget.guanzhu3, title: '我的关注③'),
   ];
 
   @override
@@ -40,8 +41,9 @@ class FollowSettingsPage extends StatelessWidget {
                 context,
                 MaterialPageRoute(
                   builder: (_) => RuleRowsPage(
-                    channel: slot.channel,
+                    target: slot.target,
                     title: slot.title,
+                    hint: '召回与屏蔽规则：命中的内容才会出现在前台的「我的关注」里。',
                   ),
                 ),
               ),

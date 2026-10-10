@@ -17,7 +17,7 @@ import 'follow_settings_page.dart';
 import 'password_page.dart';
 import 'profile_edit_page.dart';
 import 'settings_hub_page.dart';
-import 'soon_page.dart';
+import 'push_settings_page.dart';
 import 'spend_page.dart';
 import 'ucenter_list_page.dart';
 
@@ -350,7 +350,7 @@ class _ProfilePageState extends State<ProfilePage> {
       (
         icon: Icons.notifications_active_outlined,
         label: '推送设置',
-        onTap: () => _push(const PushSettingsSoonPage()),
+        onTap: () => _push(const PushSettingsPage()),
       ),
       (
         icon: Icons.filter_alt_outlined,
@@ -360,7 +360,7 @@ class _ProfilePageState extends State<ProfilePage> {
       (
         icon: Icons.link,
         label: '商品转链',
-        onTap: () => _push(const TransferSettingsSoonPage()),
+        onTap: () => _push(const TransferHubPage()),
       ),
       (
         icon: Icons.support_agent_outlined,
