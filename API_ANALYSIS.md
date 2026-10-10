@@ -83,6 +83,13 @@
 
 分页规律：`/page/{n}/`，总页数从 `.pagebar` 中提取。
 
+> **主列表必须限定在 `div.listbox` 里（2026-10-11）**：侧栏的「全站排行榜 / 精选」
+> 用的是**同一套** `li.article-list` 标记（首页 7 组、分类页 11 组，每组 10 条），
+> 直接 `document.querySelectorAll('li.article-list')` 会把 ~70 条无关热榜混进列表。
+> 搜索页尤其致命：**关键词无命中时主列表是空的**（只剩
+> `<div class="search-empty">没有找到…</div>`），此时这 70 条热榜就成了「全部搜索结果」。
+> 取值见 `lib/models/article.dart` 的 `_listScope()`。
+
 > **分类页分页另走一套格式（2026-09 改版）**：分类页的下一页链接是
 > `/category-{slug}/{n}/`（如 `/category-haodan/2/`），**不是**首页那套
 > `/category-{slug}/page/{n}/`。旧地址现在不会报错，而是安静地给出错的内容：
@@ -94,6 +101,10 @@
 > | `/category-guanzhu1/page/2/` | 静默返回**第 1 页**内容（列表会无限重复首页） |
 >
 > 取路径见 `lib/services/http_client.dart` 的 `categoryPagePath()`。
+
+> **别用 `Accept-Encoding: identity`（2026-10-11）**：列表页 HTML 未压缩约 220KB，
+> gzip 后只有 ~42KB。`dart:io` 默认会协商 gzip 并自动解压，显式要求 `identity`
+> 等于把每个页面的下载量放大 5 倍。
 
 ---
 

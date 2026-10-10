@@ -191,10 +191,16 @@ class ArticleListItem {
   }
 
   /// Parse all article list items from an SSR list HTML page.
-  static List<ArticleListItem> parseList(String html) {
-    final document = _parse(html);
+  static List<ArticleListItem> parseList(String html) =>
+      parseListFromDocument(_parse(html));
+
+  /// Same as [parseList], but reuses a document the caller already built.
+  ///
+  /// List pages carry three things the app needs (items, page count, category
+  /// nav); each of those used to build its own DOM out of the same ~200KB HTML.
+  static List<ArticleListItem> parseListFromDocument(dom.Document document) {
     final items = <ArticleListItem>[];
-    final lis = document.querySelectorAll('li.article-list');
+    final lis = _listScope(document).querySelectorAll('li.article-list');
     for (final li in lis) {
       final a = li.querySelector('p.title > a');
       if (a == null) continue;
@@ -226,6 +232,25 @@ class ArticleListItem {
     return items;
   }
 
+  /// The page's main article list.
+  ///
+  /// The sidebar's 全站排行榜 / 精选 blocks are built from the very same
+  /// `li.article-list` markup — seven or more lists of 10, and more on category
+  /// pages — so scanning the whole document mixes ~70 unrelated hot-list
+  /// entries into every page. On a search page with no hits those 70 *are* the
+  /// whole result, which is why search looked like it returned nonsense instead
+  /// of "没有找到".
+  ///
+  /// Everything the app lists sits in `div.listbox`; `main#mainbox` is the
+  /// fallback for the day the site renames that class, and only if neither
+  /// exists do we give up and take the document as-is.
+  static dom.Element _listScope(dom.Document document) {
+    return document.querySelector('div.listbox') ??
+        document.querySelector('main#mainbox') ??
+        document.body ??
+        document.documentElement!;
+  }
+
   /// Category id encoded in a figure class (`cg30` -> 30); null when absent.
   static int? _cateIdFromFigure(String figureClass) {
     final match = RegExp(r'^cg(\d+)').firstMatch(figureClass);
@@ -243,8 +268,11 @@ class ArticleListItem {
   }
 
   /// Parse total page count from pagebar in HTML.
-  static int parsePageCount(String html) {
-    final document = _parse(html);
+  static int parsePageCount(String html) =>
+      parsePageCountFromDocument(_parse(html));
+
+  /// Same as [parsePageCount], but reuses a document the caller already built.
+  static int parsePageCountFromDocument(dom.Document document) {
     final pagebar = document.querySelector('.pagebar');
     if (pagebar == null) return 1;
     final text = pagebar.text;

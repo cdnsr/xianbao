@@ -43,8 +43,11 @@ class CategoryItem {
     );
   }
 
-  static List<CategoryItem> parseCategories(String html) {
-    final document = parse(html);
+  static List<CategoryItem> parseCategories(String html) =>
+      parseCategoriesFromDocument(parse(html));
+
+  /// Same as [parseCategories], but reuses a document the caller already built.
+  static List<CategoryItem> parseCategoriesFromDocument(dom.Document document) {
     final navUl = document.querySelector('ul.nav-ul');
     if (navUl == null) return [];
 
@@ -60,9 +63,12 @@ class CategoryItem {
   ///
   /// The website derives its 「分类页:名称」 filter scopes from the title
   /// segments (see `xb_global_main_scopes`), so the app needs the same string.
-  static String parsePageTitle(String html) {
-    return parse(html).querySelector('title')?.text.trim() ?? '';
-  }
+  static String parsePageTitle(String html) =>
+      parsePageTitleFromDocument(parse(html));
+
+  /// Same as [parsePageTitle], but reuses a document the caller already built.
+  static String parsePageTitleFromDocument(dom.Document document) =>
+      document.querySelector('title')?.text.trim() ?? '';
 
   static List<dom.Element> _directChildren(dom.Element parent, String tagName) {
     final result = <dom.Element>[];

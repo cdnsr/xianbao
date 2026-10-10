@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:html/parser.dart' show parse;
 import '../models/article.dart';
 import '../models/category.dart';
 import '../models/page_meta.dart';
@@ -29,6 +30,9 @@ class ApiService {
   String lastHtmlPreview = '';
 
   List<CategoryItem>? _cachedCategories;
+
+  /// 在途的首页 HTML 请求（见 [_fetchHomeHtml]），完成后立刻清空。
+  Future<String>? _homeHtmlInFlight;
 
   MetaFilterConfig _homeFilter = MetaFilterConfig.empty;
   bool _homeFilterLoaded = false;
@@ -92,22 +96,23 @@ class ApiService {
   >
   fetchHomeData() async {
     try {
-      final html = await _client.fetchHomePage(page: 1);
+      final html = await _fetchHomeHtml(1);
       lastHtmlLength = html.length;
       lastHtmlPreview = html.length > 300 ? html.substring(0, 300) : html;
       final rules = await refreshHomeFilterRules(pageHtml: html);
       lastError = null;
 
-      final categories = CategoryItem.parseCategories(html);
+      final document = parse(html);
+      final categories = CategoryItem.parseCategoriesFromDocument(document);
       _cachedCategories = categories;
       return (
         items: _filterList(
-          ArticleListItem.parseList(html),
+          ArticleListItem.parseListFromDocument(document),
           rules,
           kHomeScopes,
         ),
         categories: categories,
-        totalPages: ArticleListItem.parsePageCount(html),
+        totalPages: ArticleListItem.parsePageCountFromDocument(document),
       );
     } catch (e) {
       lastError = e.toString();
@@ -121,16 +126,17 @@ class ApiService {
   fetchArticleList({int page = 1}) async {
     try {
       final rules = await _ensureHomeFilter();
-      final html = await _client.fetchHomePage(page: page);
+      final html = await _fetchHomeHtml(page);
       lastHtmlLength = html.length;
       lastHtmlPreview = html.length > 300 ? html.substring(0, 300) : html;
       lastError = null;
+      final document = parse(html);
       final items = _filterList(
-        ArticleListItem.parseList(html),
+        ArticleListItem.parseListFromDocument(document),
         rules,
         kHomeScopes,
       );
-      final totalPages = ArticleListItem.parsePageCount(html);
+      final totalPages = ArticleListItem.parsePageCountFromDocument(document);
       return (items: items, totalPages: totalPages, cateId: null);
     } catch (e) {
       lastError = e.toString();
@@ -145,9 +151,27 @@ class ApiService {
     if (_cachedCategories != null && !forceRefresh) {
       return _cachedCategories!;
     }
-    final html = await _client.fetchHomePage(page: 1);
+    final html = await _fetchHomeHtml(1);
     _cachedCategories = CategoryItem.parseCategories(html);
     return _cachedCategories!;
+  }
+
+  /// Home page HTML, with concurrent page-1 requests collapsed into one.
+  ///
+  /// The home tab asks for page 1 twice on cold start (once for the article
+  /// list, once for the category drawer), and a pull-to-refresh can land on top
+  /// of an in-flight load. Sharing the in-flight future keeps that to a single
+  /// download; the entry is dropped as soon as the response arrives, so a later
+  /// refresh still sees fresh content.
+  Future<String> _fetchHomeHtml(int page) {
+    if (page != 1) return _client.fetchHomePage(page: page);
+    final inFlight = _homeHtmlInFlight;
+    if (inFlight != null) return inFlight;
+    final future = _client.fetchHomePage(page: page);
+    _homeHtmlInFlight = future;
+    return future.whenComplete(() {
+      if (identical(_homeHtmlInFlight, future)) _homeHtmlInFlight = null;
+    });
   }
 
   /// Fetch article list for a specific category page.
@@ -159,9 +183,10 @@ class ApiService {
       lastHtmlPreview = html.length > 300 ? html.substring(0, 300) : html;
       lastError = null;
 
-      final items = ArticleListItem.parseList(html);
+      final document = parse(html);
+      final items = ArticleListItem.parseListFromDocument(document);
       final cateId = ArticleListItem.parseCateId(html);
-      final pageTitle = CategoryItem.parsePageTitle(html);
+      final pageTitle = CategoryItem.parsePageTitleFromDocument(document);
       return (
         items: await _filterCategoryList(
           items,
@@ -170,7 +195,7 @@ class ApiService {
           pageTitle: pageTitle,
           pageHtml: html,
         ),
-        totalPages: ArticleListItem.parsePageCount(html),
+        totalPages: ArticleListItem.parsePageCountFromDocument(document),
         cateId: cateId,
       );
     } catch (e) {
