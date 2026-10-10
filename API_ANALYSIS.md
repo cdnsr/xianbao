@@ -461,12 +461,15 @@ savedate  : 保持天数（默认 30）
   `GET …/function/yanzhengcode.php?r=<random>`；退出 `GET …/cmd.php?act=logout`。
   回包 `code=1` 出错、`code=2` 需跳转（带 `href`）、其余为成功；
   **登录是 302，请求要 `followRedirects: false` 才能把 Set-Cookie 交给 CookieManager**。
-- 每日签到：状态 `POST json/Get.php {csrfToken, act: 'MemTs'}` → `{code:0, data:{giod, qian,
-  gong}}`（`qian == 0` = 今天还没签）；签到 `POST …/mochu_us/cmd.php?act=qiandao`（无参数）
-  → `{code:1, msg}` 失败、其余成功并带最新 `giod`。**App 静默完成，不再有签到菜单**：
-  启动时若已是登录态、以及登录成功后，各补当天这一签（先查状态，避免重复写）；成功不提示，
-  只有失败才在屏幕中间弹一次 tip，且**同一天只弹一次**（详见
-  `lib/services/check_in_service.dart`）。
+- 每日签到：签到 `POST …/mochu_us/cmd.php?act=qiandao`（**无参数、不需要 csrfToken**，
+  线上实测：成功 `{"code":0,"msg":"签到成功…奖励21积分！","giod":"709"}`；今天已签
+  `{"code":1,"msg":"你今天签过到啦！"}`）。状态接口 `POST json/Get.php {csrfToken,
+  act:'MemTs'}` → `{code:0,data:{giod,qian,gong}}`，**令牌过期时回
+  `{"code":1,"msg":"网页已过期，请手动刷新整个页面！"}`**（App 收到这条会自动刷新令牌重试）。
+  **App 静默完成，不再有签到菜单**：启动时若已是登录态、以及登录成功后，各补当天这一签；
+  **直接调签到接口、不看状态接口**（状态接口的 `qian` 方向从脚本判断不出来，当闸门会
+  导致该签的时候不签；签到接口本身幂等）。成功与「已签过」都不提示，只有真失败才在
+  屏幕中间弹一次 tip，且**同一天只弹一次**（详见 `lib/services/check_in_service.dart`）。
 - 规则行与筛选页（**各页接口不一样，别照抄 channel**）：
   - `POST json/userfilter_fun.php`，`channel` ∈ `guanzhu1..3`（我的关注① ② ③）/
     `shouye`（首页）/`douban`/`weibo`/`haodan`/`global`（全局·服务端）/

@@ -35,6 +35,10 @@ class UcenterResult {
   /// 会话失效：网站用 1001 表示没登录 / 令牌过期。
   bool get needLogin => code == 1001;
 
+  /// csrf 令牌失效：服务端回「网页已过期，请手动刷新整个页面！」（实测文案）。
+  /// 这种情况刷新令牌重试即可，不该当成操作失败。
+  bool get tokenExpired => message.contains('网页已过期');
+
   factory UcenterResult.fromText(String body) {
     if (body.trim().isEmpty) return UcenterResult.empty;
     try {
@@ -211,6 +215,65 @@ class UcenterFilterTarget {
   };
 }
 
+/// 签到结果（`cmd.php?act=qiandao`）。
+///
+/// 「今天已经签过」服务端也回 `code: 1`（文案「你今天签过到啦！」），必须与真正的
+/// 失败区分开：前者不该提示，后者才提示。
+class UcenterCheckInResult {
+  /// 本次签到成功（服务端 `code != 1`）。
+  final bool ok;
+
+  /// 今天已经签过了（重复签到，不算失败）。
+  final bool alreadyDone;
+
+  final String message;
+
+  /// 签到后的积分总额（`giod`）。
+  final String points;
+
+  const UcenterCheckInResult({
+    required this.ok,
+    this.alreadyDone = false,
+    this.message = '',
+    this.points = '',
+  });
+
+  /// 真正需要提示给用户的失败：既没成功，也不是「已签过」。
+  bool get failed => !ok && !alreadyDone;
+
+  factory UcenterCheckInResult.fromText(String body) {
+    if (body.trim().isEmpty) {
+      return const UcenterCheckInResult(ok: false);
+    }
+    try {
+      final decoded = jsonDecode(body);
+      if (decoded is! Map) {
+        return const UcenterCheckInResult(ok: false);
+      }
+      final code = decoded['code']?.toString() ?? '';
+      final message = decoded['msg']?.toString() ?? '';
+      final ok = code != '1';
+      return UcenterCheckInResult(
+        ok: ok,
+        alreadyDone: !ok && _looksAlreadyCheckedIn(message),
+        message: message,
+        points: decoded['giod']?.toString() ?? '',
+      );
+    } on FormatException {
+      return const UcenterCheckInResult(ok: false);
+    }
+  }
+}
+
+/// 服务端的「今天已签到」文案（线上是「你今天签过到啦！」），匹配宽松一些。
+bool _looksAlreadyCheckedIn(String message) {
+  if (message.isEmpty) return false;
+  return message.contains('签过') ||
+      message.contains('已签到') ||
+      message.contains('已经签到') ||
+      message.contains('重复签到');
+}
+
 /// 规则行：网站 `userfilter_fun.php act=list` 的一行。
 ///
 /// 行的字段与筛选引擎的规则行同构（`Status`/`fanwei`/八组词/价格），直接复用
@@ -285,7 +348,7 @@ class UcenterService {
       data: {...data, 'csrfToken': token},
     );
     var result = UcenterResult.fromText(body);
-    if (retryOnAuthFailure && result.needLogin) {
+    if (retryOnAuthFailure && (result.needLogin || result.tokenExpired)) {
       await _ensureCsrf(forceRefresh: true);
       final retryBody = await _client.postUcenterJson(
         file,
@@ -407,36 +470,29 @@ class UcenterService {
 
   // -------------------------------------------------------------- 每日签到
 
-  /// 今日签到状态；取不到（断网/掉登录）返回 null，调用方按「不打扰」处理。
+  /// 签到（`cmd.php?act=qiandao`，网站点「签到」按钮的同一个接口）。
+  ///
+  /// 线上实测的回包：
+  ///  - 成功：`{"code":0,"msg":"签到成功…奖励21积分！","giod":"709"}`
+  ///  - 今天已签：`{"code":1,"msg":"你今天签过到啦！","giod":"709"}`
+  ///
+  /// 所以「已签过」也算失败码，要单独识别出来（见 [UcenterCheckInResult.alreadyDone]），
+  /// 否则每天第二次启动都会误报签到失败。
+  Future<UcenterCheckInResult> checkIn() async {
+    final body = await _client.checkIn();
+    return UcenterCheckInResult.fromText(body);
+  }
+
+  /// 今日签到状态（`Get.php act=MemTs`）。
+  ///
+  /// 注意：签到流程**不再依赖它**。这个接口要求有效的 csrfToken，令牌过期时会回
+  /// `{"code":1,"msg":"网页已过期，请手动刷新整个页面！"}`，而且 `qian` 的取值方向
+  /// （0 是「已签」还是「可签」）从线上脚本里判断不出来——拿它当闸门会导致该签的
+  /// 时候不签。签到接口本身是幂等的（重复签回「你今天签过到啦」），直接调用更可靠。
   Future<UcenterCheckInStatus?> fetchCheckInStatus() async {
     final result = await _postJson('Get.php', data: {'act': 'MemTs'});
     if (result.needLogin || result.raw.isEmpty) return null;
     return UcenterCheckInStatus.fromText(result.raw);
-  }
-
-  /// 签到（`cmd.php?act=qiandao`）。
-  ///
-  /// 成功后服务端返回最新积分与提示文案；失败时 `message` 是失败原因（如今天已签到、
-  /// 会员限制），由调用方决定是否提示。
-  Future<({bool ok, String message, String points})> checkIn() async {
-    final body = await _client.checkIn();
-    if (body.trim().isEmpty) {
-      return (ok: false, message: '', points: '');
-    }
-    try {
-      final decoded = jsonDecode(body);
-      if (decoded is! Map) {
-        return (ok: false, message: '', points: '');
-      }
-      final code = decoded['code']?.toString() ?? '';
-      return (
-        ok: code != '1',
-        message: decoded['msg']?.toString() ?? '',
-        points: decoded['giod']?.toString() ?? '',
-      );
-    } on FormatException {
-      return (ok: false, message: '', points: '');
-    }
   }
 
   // -------------------------------------------------------------- 规则行
