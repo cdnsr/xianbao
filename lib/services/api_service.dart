@@ -5,6 +5,7 @@ import '../models/category.dart';
 import '../models/page_meta.dart';
 import '../models/site_filter.dart';
 import 'http_client.dart';
+import 'ucenter_service.dart';
 
 /// 一个分类页的 meta 配置：推送源 + 该页自己的筛选全家桶。
 class CategoryMeta {
@@ -21,6 +22,7 @@ class CategoryMeta {
 /// High-level API service for fetching article data.
 class ApiService {
   final HttpClient _client = HttpClient();
+  final UcenterService _ucenter = UcenterService();
 
   int lastHtmlLength = 0;
   String? lastError;
@@ -54,6 +56,7 @@ class ApiService {
     _homeFilter = MetaFilterConfig.empty;
     _homeFilterLoaded = false;
     _categoryMeta.clear();
+    UcenterService.resetSession();
   }
 
   /// Fetches the homepage filter config (`meta.php?type=index…`).
@@ -347,7 +350,11 @@ class ApiService {
   }
 
   /// Check whether the user is logged in.
-  Future<bool> isLoggedIn() => _client.checkLoginState();
+  ///
+  /// null means "unknown" (offline / timeout): the session lives in a file
+  /// backed cookie jar now, so callers must not treat a failed check as a
+  /// logout.
+  Future<bool?> isLoggedIn() => _client.checkLoginState();
 
   /// Toggle collect for an article. code==1 means login required.
   Future<CollectToggleResult> toggleCollect(int articleId) async {
@@ -377,54 +384,15 @@ class ApiService {
   }
 
   /// Fetch one page of the user's collect list.
+  ///
+  /// 用户中心的表格接口统一由 [UcenterService] 负责（令牌缓存、掉登录处理），
+  /// 这里只是转发，保持收藏页的调用方式不变。
   Future<({List<CollectListItem> items, int total})> fetchCollectList({
     int page = 1,
     int limit = 20,
-  }) async {
-    final csrf = await _client.fetchUserCenterCsrfToken();
-    if (csrf == null || csrf.isEmpty) {
-      throw Exception('无法获取用户中心令牌，请重新登录');
-    }
-    final raw = await _client.fetchCollectListJson(
-      csrfToken: csrf,
-      page: page,
-      limit: limit,
-    );
-    if (raw.trim().isEmpty) {
-      return (items: <CollectListItem>[], total: 0);
-    }
-    final json = jsonDecode(raw) as Map<String, dynamic>;
-    final code = json['code'];
-    if (code == 1001 || code == '1001') {
-      throw Exception(json['msg']?.toString() ?? '请先登录');
-    }
-    final list = (json['data'] as List?) ?? const [];
-    final items = list
-        .whereType<Map>()
-        .map((e) => CollectListItem.fromApiMap(Map<String, dynamic>.from(e)))
-        .where((e) => e.collectId.isNotEmpty)
-        .toList();
-    final total = (json['count'] as num?)?.toInt() ?? items.length;
-    return (items: items, total: total);
-  }
+  }) => _ucenter.fetchCollectList(page: page, limit: limit);
 
   /// Cancel collect by collect-record id.
-  Future<({bool ok, String message})> deleteCollect(String collectId) async {
-    final csrf = await _client.fetchUserCenterCsrfToken();
-    if (csrf == null || csrf.isEmpty) {
-      return (ok: false, message: '无法获取用户中心令牌，请重新登录');
-    }
-    final raw = await _client.deleteCollect(
-      collectId: collectId,
-      csrfToken: csrf,
-    );
-    if (raw.trim().isEmpty) {
-      return (ok: false, message: '取消收藏失败');
-    }
-    final json = jsonDecode(raw) as Map<String, dynamic>;
-    final code = json['code'];
-    final msg = json['msg']?.toString() ?? '';
-    final ok = code == 0 || code == '0';
-    return (ok: ok, message: msg.isEmpty ? (ok ? '已取消收藏' : '取消收藏失败') : msg);
-  }
+  Future<({bool ok, String message})> deleteCollect(String collectId) =>
+      _ucenter.deleteCollect(collectId);
 }

@@ -1,15 +1,17 @@
-import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:webview_flutter/webview_flutter.dart';
-import '../../services/app_state.dart';
-import '../../utils/cookie_bridge.dart';
-import '../../utils/error_message.dart';
-import '../../utils/webview_dark_theme.dart';
-import '../../widgets/load_error_view.dart';
 
-/// Login page using WebView, as login requires captcha and JS.
-/// After successful login, syncs cookies back to Dio.
+import '../../services/app_state.dart';
+import '../../services/ucenter_service.dart';
+import '../../utils/error_message.dart';
+import '../../utils/external_link.dart';
+
+/// Native login page (账号密码 + 计算题验证码).
+///
+/// 网站登录本来是 WebView 里的表单，这里按同样的协议原生实现：验证码图
+/// `yanzhengcode.php`，提交到 `cmd.php?act=verify`（密码 MD5 后传）。
+/// 注册 / 忘记密码这类带第三方流程的页面仍用系统浏览器打开。
 class LoginPage extends StatefulWidget {
   final AppState appState;
 
@@ -20,396 +22,277 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  late final WebViewController _controller;
-  bool _loaded = false;
-  bool _loginHandled = false;
-  bool? _lastDark;
-  final List<Timer> _themeRetryTimers = <Timer>[];
-  final List<Timer> _uiTweakRetryTimers = <Timer>[];
+  final UcenterService _service = UcenterService();
+  final TextEditingController _username = TextEditingController();
+  final TextEditingController _password = TextEditingController();
+  final TextEditingController _vercode = TextEditingController();
 
-  /// Non-null when the WebView's main frame failed to load; the friendly
-  /// message replaces the platform's raw error page until the user retries.
-  String? _loadError;
-
-  static final Uri _loginUrl =
-      Uri.parse('https://new.xianbao.fun/login.html');
-
-  static const Color _darkBg = Color(WebViewDarkTheme.darkBgArgb);
-  static const Color _lightBg = Color(WebViewDarkTheme.lightBgArgb);
-
-  /// Login-page-only UI tweaks (ES5 for Android WebView):
-  /// 1) default-check "保持登录" (first ~5s only, respects later user uncheck)
-  /// 2) hide "返回首页" (app already has bottom nav home)
-  static const String _loginUiTweakJs = r'''
-(function(){
-  try {
-    var STYLE_ID = 'xianbao-login-ui-tweak';
-    var css = ''
-      + '.layui-login-returnindex{display:none !important;visibility:hidden !important;'
-      + 'height:0 !important;max-height:0 !important;overflow:hidden !important;'
-      + 'margin:0 !important;padding:0 !important;border:0 !important;}'
-      + '.layui-login-returnindex a{display:none !important;}';
-
-    function injectStyle() {
-      var parent = document.head || document.documentElement;
-      var s = document.getElementById(STYLE_ID);
-      if (!s) {
-        s = document.createElement('style');
-        s.id = STYLE_ID;
-        s.type = 'text/css';
-        parent.appendChild(s);
-      }
-      if (s.styleSheet) { s.styleSheet.cssText = css; } else { s.innerHTML = css; }
-    }
-
-    function hideReturnHome() {
-      injectStyle();
-      var nodes = document.querySelectorAll('.layui-login-returnindex');
-      for (var i = 0; i < nodes.length; i++) {
-        try {
-          nodes[i].style.setProperty('display', 'none', 'important');
-          nodes[i].setAttribute('hidden', 'hidden');
-        } catch (e) {}
-      }
-      var links = document.querySelectorAll('a');
-      for (var j = 0; j < links.length; j++) {
-        var t = (links[j].textContent || '').replace(/\s+/g, '');
-        if (t === '返回首页') {
-          var wrap = links[j].closest
-            ? links[j].closest('.layui-login-returnindex')
-            : null;
-          var el = wrap || links[j];
-          try {
-            el.style.setProperty('display', 'none', 'important');
-            el.setAttribute('hidden', 'hidden');
-          } catch (e2) {}
-        }
-      }
-    }
-
-    function bindUserTouch(cb) {
-      if (window.__xianbaoKeepLoginListen || !cb) return;
-      window.__xianbaoKeepLoginListen = true;
-      var markTouched = function () {
-        window.__xianbaoKeepLoginUserTouched = true;
-      };
-      try { cb.addEventListener('change', markTouched); } catch (e) {}
-      try { cb.addEventListener('click', markTouched); } catch (e2) {}
-      var box = cb.nextElementSibling;
-      if (box && box.classList && box.classList.contains('layui-form-checkbox')) {
-        try { box.addEventListener('click', markTouched); } catch (e3) {}
-      }
-      if (cb.parentNode) {
-        var boxes = cb.parentNode.querySelectorAll('.layui-form-checkbox');
-        for (var i = 0; i < boxes.length; i++) {
-          try { boxes[i].addEventListener('click', markTouched); } catch (e4) {}
-        }
-      }
-    }
-
-    function markKeepLoginChecked() {
-      // Stop forcing after user toggles, or after settle window.
-      if (window.__xianbaoKeepLoginUserTouched) return true;
-      if (!window.__xianbaoKeepLoginStart) {
-        window.__xianbaoKeepLoginStart = Date.now();
-      }
-      var elapsed = Date.now() - window.__xianbaoKeepLoginStart;
-      // After 6s stop re-forcing so user uncheck sticks permanently.
-      if (elapsed > 6000 && window.__xianbaoKeepLoginDefaulted) return true;
-
-      var cb = document.querySelector('input[lay-filter="Baochi"]')
-        || document.querySelector('#LAY-user-login input[type="checkbox"]')
-        || document.querySelector('input[title="保持登录"]');
-      if (!cb) return false;
-
-      bindUserTouch(cb);
-
-      if (!cb.checked) {
-        cb.checked = true;
-        try { cb.setAttribute('checked', 'checked'); } catch (e) {}
-        try { cb.defaultChecked = true; } catch (e2) {}
-      }
-
-      var box = cb.nextElementSibling;
-      if (box && box.classList && box.classList.contains('layui-form-checkbox')) {
-        if (!box.classList.contains('layui-form-checked')) {
-          box.classList.add('layui-form-checked');
-        }
-      } else if (cb.parentNode) {
-        var boxes = cb.parentNode.querySelectorAll('.layui-form-checkbox');
-        for (var i = 0; i < boxes.length; i++) {
-          if (!boxes[i].classList.contains('layui-form-checked')) {
-            boxes[i].classList.add('layui-form-checked');
-          }
-        }
-      }
-
-      try {
-        if (window.layui && layui.form) {
-          layui.form.render('checkbox');
-          var cb2 = document.querySelector('input[lay-filter="Baochi"]')
-            || document.querySelector('#LAY-user-login input[type="checkbox"]');
-          if (cb2) {
-            bindUserTouch(cb2);
-            cb2.checked = true;
-            try { cb2.setAttribute('checked', 'checked'); } catch (e3) {}
-            var box2 = cb2.nextElementSibling;
-            if (box2 && box2.classList && box2.classList.contains('layui-form-checkbox')) {
-              box2.classList.add('layui-form-checked');
-            }
-          }
-        }
-      } catch (e4) {}
-
-      // Site login uses global `date` as savedate (days). Keep-login => 30.
-      try { window.date = 30; } catch (e5) {
-        try { date = 30; } catch (e6) {}
-      }
-
-      window.__xianbaoKeepLoginDefaulted = true;
-      return true;
-    }
-
-    hideReturnHome();
-    markKeepLoginChecked();
-
-    if (!window.__xianbaoLoginUiObs) {
-      var t = null;
-      window.__xianbaoLoginUiObs = new MutationObserver(function () {
-        if (t) return;
-        t = setTimeout(function () {
-          t = null;
-          hideReturnHome();
-          markKeepLoginChecked();
-        }, 150);
-      });
-      try {
-        window.__xianbaoLoginUiObs.observe(document.documentElement, {
-          childList: true,
-          subtree: true
-        });
-      } catch (e7) {}
-    }
-
-    if (!window.__xianbaoLoginUiKeepAlive) {
-      window.__xianbaoLoginUiKeepAlive = setInterval(function () {
-        hideReturnHome();
-        markKeepLoginChecked();
-        // Stop interval after settle if default applied (hide still done via style).
-        if (window.__xianbaoKeepLoginDefaulted
-            && window.__xianbaoKeepLoginStart
-            && (Date.now() - window.__xianbaoKeepLoginStart > 8000)) {
-          clearInterval(window.__xianbaoLoginUiKeepAlive);
-          window.__xianbaoLoginUiKeepAlive = null;
-        }
-      }, 1200);
-    }
-
-    return 'login-ui-ok';
-  } catch (err) {
-    return 'login-ui-err:' + (err && err.message ? err.message : err);
-  }
-})();
-''';
+  Uint8List? _captcha;
+  bool _captchaLoading = true;
+  bool _submitting = false;
+  bool _keepLoggedIn = true;
+  String? _error;
 
   @override
   void initState() {
     super.initState();
-    _initWebView();
+    _loadCaptcha();
   }
 
   @override
   void dispose() {
-    _clearThemeRetries();
-    _clearUiTweakRetries();
+    _username.dispose();
+    _password.dispose();
+    _vercode.dispose();
     super.dispose();
   }
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    if (_loaded && _lastDark != isDark) {
-      unawaited(_applyThemeToWebView(isDark, scheduleRetries: true));
-    }
-  }
-
-  void _initWebView() {
-    _controller = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onPageFinished: (url) async {
-            // After any page load, sync cookies from WebView to Dio
-            // and check login state.
-            await CookieBridge.syncFromWebView();
-
-            if (mounted) {
-              final isDark = Theme.of(context).brightness == Brightness.dark;
-              await _applyThemeToWebView(isDark, scheduleRetries: true);
-              await _applyLoginUiTweaks(scheduleRetries: true);
-            }
-
-            final loggedIn = await _controller
-                .runJavaScriptReturningResult(
-                  '!!document.querySelector("#LAY-user-login") == false',
-                )
-                .then((r) => r.toString() == 'true')
-                .catchError((_) => false);
-            if (loggedIn && !_loginHandled) {
-              _loginHandled = true;
-              // Full sync ensures all cookies including category
-              // filter preferences (COWL) are shared with Dio.
-              await CookieBridge.fullSyncFromWebView();
-              // Also capture cookies via document.cookie to supplement
-              // any cookies that WebViewCookieManager might miss.
-              try {
-                final docCookie = await _controller
-                    .runJavaScriptReturningResult('document.cookie');
-                CookieBridge.setLoginCookieResult(docCookie);
-              } catch (_) {}
-              await widget.appState.onLoginSuccess();
-            }
-          },
-          onUrlChange: (change) {
-            if (!mounted || _loginHandled) return;
-            final isDark = Theme.of(context).brightness == Brightness.dark;
-            if (isDark) {
-              unawaited(_applyThemeToWebView(true, scheduleRetries: true));
-            }
-            unawaited(_applyLoginUiTweaks(scheduleRetries: true));
-          },
-          onWebResourceError: (error) {
-            if (!mounted || _loginHandled) return;
-            // Only main-frame failures should replace the page; a failed image
-            // or script must not blank the login form.
-            if (error.isForMainFrame != true) return;
-            setState(() => _loadError = friendlyWebViewErrorMessage(error));
-          },
-        ),
-      );
-
-    // Sync Dio cookies to WebView before loading.
-    CookieBridge.syncToWebView().then((_) async {
-      if (!mounted) return;
-      final isDark = Theme.of(context).brightness == Brightness.dark;
-      await _controller.setBackgroundColor(isDark ? _darkBg : _lightBg);
-      _lastDark = isDark;
-      await _controller.loadRequest(_loginUrl);
-      setState(() => _loaded = true);
+  Future<void> _loadCaptcha() async {
+    setState(() {
+      _captchaLoading = true;
+      _captcha = null;
     });
+    try {
+      final bytes = await _service.fetchCaptcha();
+      if (!mounted) return;
+      setState(() {
+        _captcha = bytes;
+        _captchaLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _captchaLoading = false);
+    }
   }
 
-  Future<void> _retryLoad() async {
-    setState(() => _loadError = null);
+  Future<void> _submit() async {
+    if (_submitting) return;
+    final username = _username.text.trim();
+    final password = _password.text;
+    final vercode = _vercode.text.trim();
+
+    if (username.isEmpty) {
+      setState(() => _error = '用户名不能为空');
+      return;
+    }
+    if (password.isEmpty) {
+      setState(() => _error = '密码不能为空');
+      return;
+    }
+    if (vercode.isEmpty) {
+      setState(() => _error = '验证码不能为空');
+      return;
+    }
+
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
+
     try {
-      await _controller.loadRequest(_loginUrl);
+      final result = await _service.login(
+        username: username,
+        password: password,
+        vercode: vercode,
+        keepLoggedIn: _keepLoggedIn,
+      );
+      if (!mounted) return;
+
+      if (result.ok) {
+        // 新会话：丢掉上一个账号留下的用户中心令牌。
+        UcenterService.resetSession();
+        await widget.appState.onLoginSuccess();
+        return;
+      }
+
+      setState(() {
+        _submitting = false;
+        _error = result.message.isEmpty ? '登录失败，请重试' : result.message;
+      });
+      _password.clear();
+      _vercode.clear();
+      await _loadCaptcha();
+
+      // code == 2：服务端要求去某个地址继续（如邮箱验证）。
+      final redirect = result.redirectUrl;
+      if (redirect != null && redirect.isNotEmpty) {
+        await openExternalUrl(redirect);
+      }
     } catch (e) {
-      debugPrint('login retry load failed: $e');
-    }
-  }
-
-  void _clearThemeRetries() {
-    for (final timer in _themeRetryTimers) {
-      timer.cancel();
-    }
-    _themeRetryTimers.clear();
-  }
-
-  void _clearUiTweakRetries() {
-    for (final timer in _uiTweakRetryTimers) {
-      timer.cancel();
-    }
-    _uiTweakRetryTimers.clear();
-  }
-
-  Future<void> _applyThemeToWebView(
-    bool isDark, {
-    bool scheduleRetries = false,
-  }) async {
-    _lastDark = isDark;
-    try {
-      await _controller.setBackgroundColor(isDark ? _darkBg : _lightBg);
-      await _controller.runJavaScriptReturningResult(
-        isDark ? WebViewDarkTheme.injectJs : WebViewDarkTheme.removeJs,
-      );
-    } catch (_) {
-      // Page may be mid-navigation; retries will re-apply.
-    }
-
-    if (!scheduleRetries || !isDark) {
-      _clearThemeRetries();
-      return;
-    }
-
-    _clearThemeRetries();
-    for (final delayMs in const [300, 800, 1600, 3000, 5000]) {
-      _themeRetryTimers.add(
-        Timer(Duration(milliseconds: delayMs), () {
-          if (!mounted || _lastDark != true) return;
-          unawaited(_applyThemeToWebView(true));
-        }),
-      );
-    }
-  }
-
-  Future<void> _applyLoginUiTweaks({bool scheduleRetries = false}) async {
-    try {
-      await _controller.runJavaScriptReturningResult(_loginUiTweakJs);
-    } catch (_) {
-      // Page may be mid-navigation; retries will re-apply.
-    }
-
-    if (!scheduleRetries) {
-      _clearUiTweakRetries();
-      return;
-    }
-
-    _clearUiTweakRetries();
-    // Layui form.render runs after page scripts; retry to catch late checkbox DOM.
-    for (final delayMs in const [200, 500, 1000, 2000, 4000]) {
-      _uiTweakRetryTimers.add(
-        Timer(Duration(milliseconds: delayMs), () {
-          if (!mounted || _loginHandled) return;
-          unawaited(_applyLoginUiTweaks());
-        }),
-      );
+      if (!mounted) return;
+      setState(() {
+        _submitting = false;
+        _error = friendlyErrorMessage(e);
+      });
+      await _loadCaptcha();
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
     return Scaffold(
-      backgroundColor: isDark ? _darkBg : null,
       appBar: AppBar(
         title: const Text('登录'),
         centerTitle: true,
         automaticallyImplyLeading: false,
       ),
-      body: !_loaded
-          ? const Center(child: CircularProgressIndicator())
-          : Stack(
-              children: [
-                ColoredBox(
-                  color: isDark ? _darkBg : _lightBg,
-                  child: WebViewWidget(controller: _controller),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
+          children: [
+            Center(
+              child: Image.asset(
+                'assets/app_icon.png',
+                width: 72,
+                height: 72,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Center(
+              child: Text(
+                '线报酷',
+                style: theme.textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.bold,
                 ),
-                // Keep the WebView mounted underneath so retry only has to
-                // reload it rather than rebuild the platform view.
-                if (_loadError != null)
-                  Positioned.fill(
-                    child: ColoredBox(
-                      color: theme.scaffoldBackgroundColor,
-                      child: LoadErrorView(
-                        message: _loadError!,
-                        onRetry: _retryLoad,
-                      ),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Center(
+              child: Text(
+                '登录后可同步你的筛选规则与收藏',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+            const SizedBox(height: 28),
+            TextField(
+              controller: _username,
+              textInputAction: TextInputAction.next,
+              autocorrect: false,
+              decoration: const InputDecoration(
+                labelText: '用户名',
+                prefixIcon: Icon(Icons.person_outline),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _password,
+              obscureText: true,
+              textInputAction: TextInputAction.next,
+              decoration: const InputDecoration(
+                labelText: '密码',
+                prefixIcon: Icon(Icons.lock_outline),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _vercode,
+                    keyboardType: TextInputType.number,
+                    textInputAction: TextInputAction.done,
+                    onSubmitted: (_) => _submit(),
+                    decoration: const InputDecoration(
+                      labelText: '验证码',
+                      hintText: '计算结果',
+                      prefixIcon: Icon(Icons.calculate_outlined),
                     ),
                   ),
+                ),
+                const SizedBox(width: 12),
+                _buildCaptcha(theme),
               ],
             ),
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                Expanded(
+                  child: InkWell(
+                    onTap: () => setState(() => _keepLoggedIn = !_keepLoggedIn),
+                    child: Row(
+                      children: [
+                        Checkbox(
+                          value: _keepLoggedIn,
+                          onChanged: (v) =>
+                              setState(() => _keepLoggedIn = v ?? false),
+                        ),
+                        const Text('保持登录'),
+                      ],
+                    ),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () =>
+                      openExternalUrl('https://new.xianbao.fun/Retpass.html'),
+                  child: const Text('忘记密码?'),
+                ),
+              ],
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                _error!,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.error,
+                ),
+              ),
+            ],
+            const SizedBox(height: 16),
+            FilledButton(
+              onPressed: _submitting ? null : _submit,
+              child: _submitting
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('登 录'),
+            ),
+            const SizedBox(height: 16),
+            Center(
+              child: TextButton(
+                onPressed: () =>
+                    openExternalUrl('https://new.xianbao.fun/register.html'),
+                child: const Text('注册帐号'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCaptcha(ThemeData theme) {
+    return InkWell(
+      onTap: _loadCaptcha,
+      child: Container(
+        width: 120,
+        height: 52,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          border: Border.all(color: theme.colorScheme.outlineVariant),
+          borderRadius: BorderRadius.circular(4),
+          color: theme.colorScheme.surface,
+        ),
+        child: _captchaLoading
+            ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : (_captcha == null || _captcha!.isEmpty)
+            ? Text(
+                '点击刷新',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.primary,
+                ),
+              )
+            : Image.memory(_captcha!, gaplessPlayback: true),
+      ),
     );
   }
 }

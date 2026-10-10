@@ -1,9 +1,11 @@
 import 'dart:ui' show PlatformDispatcher;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'services/app_state.dart';
 import 'services/home_cache_service.dart';
+import 'services/http_client.dart';
 import 'services/theme_controller.dart';
 import 'theme/app_theme.dart';
 import 'pages/main_shell.dart';
@@ -55,6 +57,14 @@ Future<void> main() async {
     debugPrint('AsyncError: $error\n$stack');
     return true;
   };
+  // 登录态现在是原生 Cookie（不再经过 WebView），把 jar 落到应用目录里，
+  // 这样重启后仍然是登录状态。拿不到目录就退回内存 jar，不影响使用。
+  try {
+    final dir = await getApplicationSupportDirectory();
+    await HttpClient().configureCookieStore(dir.path);
+  } catch (e) {
+    debugPrint('cookie store init failed: $e');
+  }
   final initialHomeCache = await HomeCacheService().load();
   final themeController = ThemeController();
   await themeController.load();

@@ -45,6 +45,9 @@ dependencies:
   cookie_jar: ^4.0.8
   dio_cookie_manager: ^3.1.1
 
+  # md5 for the site's native login form (password is hashed client-side)
+  crypto: ^3.0.6
+
   # HTML parsing
   html: ^0.15.4
 

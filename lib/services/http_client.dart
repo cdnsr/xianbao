@@ -1,9 +1,9 @@
 import 'package:dio/dio.dart';
 import 'package:cookie_jar/cookie_jar.dart';
 import 'package:dio_cookie_manager/dio_cookie_manager.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'dart:convert';
 import 'dart:typed_data';
-import '../utils/cookie_header_codec.dart';
 
 /// Path of a category page for a given page number.
 ///
@@ -13,28 +13,51 @@ import '../utils/cookie_header_codec.dart';
 String categoryPagePath(String slug, int page) =>
     page <= 1 ? '/category-$slug/' : '/category-$slug/$page/';
 
+/// Directory of the user center plugin's server-rendered view fragments.
+const String _ucenterViewBase =
+    '/zb_users/plugin/mochu_us/src/views/';
+
+/// JSON controllers of the same plugin (paged tables, form writes).
+const String _ucenterJsonBase = '/zb_users/plugin/mochu_us/json/';
+
 /// Singleton Dio instance with cookie management, shared across the app.
+///
+/// Login is native now (email/password + captcha through the site's own
+/// `cmd.php?act=verify`), so the cookie jar is the single source of truth for
+/// the session and has to survive restarts — [configureCookieStore] swaps the
+/// in-memory jar for a file-backed one at startup.
 class HttpClient {
   static const String baseUrl = 'https://new.xianbao.fun';
 
   static final HttpClient _instance = HttpClient._internal();
   late final Dio dio;
-  late final CookieJar cookieJar;
-  String? _loginCookieHeader;
 
-  /// Set the login cookie header string directly. This bypasses
-  /// the CookieJar domain-matching logic which can fail on some
-  /// Android WebView implementations. Called by CookieBridge after
-  /// syncing cookies from WebView.
-  void setLoginCookieHeader(String? cookieHeader) {
-    _loginCookieHeader = CookieHeaderCodec.normalize(cookieHeader);
+  CookieJar? _jar;
+  bool _persistentStore = false;
+
+  /// The active cookie jar.
+  ///
+  /// Falls back to an in-memory jar when [configureCookieStore] was never called
+  /// (desktop runs, tests, or path_provider failing) — the [CookieManager]
+  /// interceptor is installed together with whichever jar wins, so requests are
+  /// never sent without cookies.
+  CookieJar get cookieJar {
+    final existing = _jar;
+    if (existing != null) return existing;
+    return _installJar(CookieJar(), persistent: false);
   }
 
-  /// Get the current login cookie header (for debugging).
-  String? get loginCookieHeader => _loginCookieHeader;
+  /// True once cookies are backed by a file and survive app restarts.
+  bool get hasPersistentStore => _persistentStore;
+
+  CookieJar _installJar(CookieJar jar, {required bool persistent}) {
+    _jar = jar;
+    _persistentStore = persistent;
+    dio.interceptors.add(CookieManager(jar, ignoreInvalidCookies: true));
+    return jar;
+  }
 
   HttpClient._internal() {
-    cookieJar = CookieJar();
     dio = Dio(
       BaseOptions(
         baseUrl: baseUrl,
@@ -51,26 +74,37 @@ class HttpClient {
         },
       ),
     );
-    // Load CookieJar first. The direct WebView header is applied afterwards,
-    // so dio_cookie_manager never reparses JavaScript cookie strings.
-    dio.interceptors.add(CookieManager(cookieJar, ignoreInvalidCookies: true));
-    dio.interceptors.add(
-      InterceptorsWrapper(
-        onRequest: (options, handler) {
-          if (_loginCookieHeader != null && _loginCookieHeader!.isNotEmpty) {
-            final jarHeader = options.headers['Cookie']?.toString();
-            options.headers['Cookie'] = CookieHeaderCodec.merge(
-              jarHeader,
-              _loginCookieHeader!,
-            );
-          }
-          handler.next(options);
-        },
-      ),
-    );
   }
 
   factory HttpClient() => _instance;
+
+  /// Point the cookie jar at [directory] so the session survives restarts.
+  ///
+  /// Must run before the first request that needs the session; `main()` awaits
+  /// it. Cookies are stored as files by `PersistCookieJar`; if an in-memory jar
+  /// was already installed (nothing in `main()` should touch the client first),
+  /// the persistent store is skipped rather than silently replaced mid-flight.
+  Future<void> configureCookieStore(String directory) async {
+    if (_jar != null) {
+      if (!_persistentStore) {
+        debugPrint(
+          'HttpClient: cookie jar already in use, keeping in-memory store',
+        );
+      }
+      return;
+    }
+    final persistent = PersistCookieJar(
+      storage: FileStorage(directory),
+      persistSession: true,
+    );
+    await persistent.forceInit();
+    _installJar(persistent, persistent: true);
+  }
+
+  /// Drop every stored cookie (logout / session expired).
+  Future<void> clearCookies() async {
+    await cookieJar.deleteAll();
+  }
 
   /// Decode response bytes to UTF-8 string. Bypasses Dio's response
   /// processing entirely, which avoids issues with chunked transfer
@@ -176,8 +210,11 @@ class HttpClient {
   }
 
   /// Check login state by fetching /login.html.
-  /// If the page contains login form (#LAY-user-login), user is not logged in.
-  Future<bool> checkLoginState() async {
+  ///
+  /// Returns null when the answer is unknown (network error, timeout): with a
+  /// file-backed cookie jar, treating "offline" as "logged out" would silently
+  /// drop a valid session, so callers must only act on a definite false.
+  Future<bool?> checkLoginState() async {
     try {
       final resp = await dio.get<Uint8List>(
         '/login.html',
@@ -186,8 +223,113 @@ class HttpClient {
       final html = _decodeBytes(resp.data ?? []);
       return !html.contains('LAY-user-login');
     } catch (_) {
-      return false;
+      return null;
     }
+  }
+
+  // ---------------------------------------------------------------- 用户中心
+
+  /// Fetch the captcha image bytes for the native login form.
+  ///
+  /// The site renders an arithmetic question; the answer goes back as `vercode`
+  /// on login. `r` busts the server-side cache, exactly like the page does.
+  Future<Uint8List> fetchCaptcha() async {
+    final resp = await dio.get<List<int>>(
+      '/zb_users/plugin/mochu_us/function/yanzhengcode.php',
+      queryParameters: {'r': DateTime.now().millisecondsSinceEpoch},
+      options: Options(
+        responseType: ResponseType.bytes,
+        headers: const {'Accept': 'image/*,*/*;q=0.8'},
+      ),
+    );
+    return Uint8List.fromList(resp.data ?? const <int>[]);
+  }
+
+  /// Native login (`cmd.php?act=verify`), returns the raw JSON body.
+  ///
+  /// Redirects are **not** followed: the site answers a successful login with a
+  /// 302, and `CookieManager` only stores `Set-Cookie` from 3xx responses when
+  /// the request does not follow them — following the redirect throws the
+  /// session cookies away.
+  Future<String> login({
+    required String username,
+    required String passwordMd5,
+    required String vercode,
+    required int savedate,
+  }) async {
+    final resp = await dio.post<Uint8List>(
+      '/zb_users/plugin/mochu_us/cmd.php?act=verify',
+      data: {
+        'username': username,
+        'password': passwordMd5,
+        'vercode': vercode,
+        'savedate': savedate.toString(),
+      },
+      options: Options(
+        contentType: Headers.formUrlEncodedContentType,
+        responseType: ResponseType.bytes,
+        followRedirects: false,
+        validateStatus: (s) => s != null && s < 400,
+      ),
+    );
+    return _decodeBytes(resp.data ?? []);
+  }
+
+  /// Server-side logout.
+  Future<String> logout() async {
+    final resp = await dio.get<Uint8List>(
+      '/zb_users/plugin/mochu_us/cmd.php?act=logout',
+      options: Options(
+        responseType: ResponseType.bytes,
+        validateStatus: (s) => s != null && s < 400,
+      ),
+    );
+    return _decodeBytes(resp.data ?? []);
+  }
+
+  /// 每日签到（`cmd.php?act=qiandao`，网站点「签到」按钮的同一个接口）。
+  ///
+  /// 回包 JSON：`code == 1` 失败（`msg` 是原因），其余成功并带最新的 `giod` 积分。
+  Future<String> checkIn() async {
+    final resp = await dio.post<Uint8List>(
+      '/zb_users/plugin/mochu_us/cmd.php?act=qiandao',
+      options: Options(
+        contentType: Headers.formUrlEncodedContentType,
+        responseType: ResponseType.bytes,
+        validateStatus: (s) => s != null && s < 500,
+      ),
+    );
+    return _decodeBytes(resp.data ?? []);
+  }
+
+  /// POST one of the user center's server-rendered view fragments.
+  ///
+  /// Views live under `src/views/<name>.php` and are POST-only; they return the
+  /// HTML the SPA injects (`index`, `Nav`, `Collectlist`, `Shezhi_jiben`, …).
+  Future<String> postUcenterView(String view, {String routs = ''}) async {
+    final resp = await dio.post<Uint8List>(
+      '$_ucenterViewBase$view.php',
+      data: {'v': '3.70', 'routs': routs},
+      options: Options(
+        contentType: Headers.formUrlEncodedContentType,
+        responseType: ResponseType.bytes,
+        validateStatus: (s) => s != null && s < 500,
+      ),
+    );
+    return _decodeBytes(resp.data ?? []);
+  }
+
+  /// POST a user center JSON controller (`List.php`, `Get.php`,
+  /// `userfilter_fun.php`, `shezhi_fun.php`).
+  ///
+  /// Callers add the `csrfToken` / `act` fields themselves, mirroring the
+  /// website's own AJAX calls.
+  Future<String> postUcenterJson(
+    String file, {
+    Map<String, dynamic>? query,
+    required Map<String, dynamic> data,
+  }) {
+    return postForm('$_ucenterJsonBase$file', data: data, queryParameters: query);
   }
 
   /// In-memory image cache to avoid re-fetching on rebuild/scroll.
@@ -342,37 +484,5 @@ class HttpClient {
       r"basecrsfcode:'([^']+)'",
     ).firstMatch(html);
     return match?.group(1);
-  }
-
-  /// Fetch collect list page from user center List.php.
-  Future<String> fetchCollectListJson({
-    required String csrfToken,
-    int page = 1,
-    int limit = 20,
-  }) {
-    return postForm(
-      '/zb_users/plugin/mochu_us/json/List.php',
-      data: {
-        'csrfToken': csrfToken,
-        'act': 'CollList',
-        'page': page.toString(),
-        'limit': limit.toString(),
-      },
-    );
-  }
-
-  /// Cancel a collect entry by collect-record id.
-  Future<String> deleteCollect({
-    required String collectId,
-    required String csrfToken,
-  }) {
-    return postForm(
-      '/zb_users/plugin/mochu_us/json/Get.php',
-      data: {
-        'id': collectId,
-        'csrfToken': csrfToken,
-        'act': 'CollDel',
-      },
-    );
   }
 }

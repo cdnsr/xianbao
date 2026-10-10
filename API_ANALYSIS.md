@@ -393,7 +393,7 @@ JSON 结构与 push.json 相同。
 
 ### 6. 登录
 
-**类型：JSON API + 验证码（需要 WebView）**
+**类型：JSON API + 验证码图片（App 已原生实现）**
 
 #### 6.1 独立登录页
 
@@ -430,24 +430,71 @@ savedate  : 保持天数（默认 30）
 | 参数 | `username`, `password`(MD5), `savedate` |
 | 注意 | 此接口无验证码，但可能仅在特定页面可用 |
 
-> 根据 AGENT.md，登录页面建议使用 WebView，以处理验证码图片和 Cookie。
+> App 现在是原生登录：验证码图直接 `Image.memory` 显示，登录走同一接口，
+> Cookie 由持久化 CookieJar 落盘（见第 7 节）。注册 / 忘记密码 / 微信登录
+> 仍用系统浏览器打开网站页面。
 
 ---
 
 ### 7. 用户中心
 
-**类型：WebView（登录后状态）**
+用户中心是 mochu_us 插件的 layui SPA（`/Ucenter` 只是个壳），页面与数据分三处：
 
-| 项 | 值 |
-|---|---|
-| URL | `GET /login.html`（登录后显示用户中心） |
-| 判断方式 | 访问 `/login.html`，若页面含登录表单（`#LAY-user-login`）则未登录；否则为用户中心 |
-| 登录成功后 | 页面自动 reload，显示用户中心内容 |
+| 用途 | 接口 | 说明 |
+|---|---|---|
+| 页面片段 | `POST /zb_users/plugin/mochu_us/src/views/<View>.php` | 表单 `{v: '3.70', routs}`，返回 HTML 片段（首页统计、Nav、各设置页表单、流水表格） |
+| 分页表格 | `POST /zb_users/plugin/mochu_us/json/List.php` | `{csrfToken, act, page, limit}` → `{code, count, data[]}`；act：`CollList`/`CommentList`/`GongDanList`/`BuyPostList`/`TongZhiXiList` |
+| 写操作 | `POST /zb_users/plugin/mochu_us/json/{Get,userfilter_fun,shezhi_fun}.php` | 见下 |
+| csrf 令牌 | `GET /Ucenter` 里的 `basecrsfcode:'…'` | 会话级；掉登录/令牌过期返回 `code: 1001` |
 
-> 用户中心依赖登录 Cookie，无法在未登录状态下分析其具体内容。
-> 根据 AGENT.md，用户中心使用 WebView + Flutter"返回首页"按钮。
+**关键接口**
 
----
+- 首页统计：`views/index.php` 的四张卡片（`账号级别` / `积分` / `收藏文章` / `评论总数`），
+  形如 `<div class="layui-card-header">积分：<span><a>充值</a></span></div>
+  …<p class="layuiadmin-big-font level">668</p>`；公告在 `.gonggao`。
+- 头像/昵称/等级：`views/Nav.php` 的 `img.nav-avatar` 与 `.usernav`（`span.viple0`＝等级名，
+  后面紧跟昵称）。
+- **未登录时这两个片段返回的是「温馨提示：您的登陆已到期」**（`.posttips`），不是 4xx ——
+  App 靠它把「掉登录」与「页面没数据」区分开（`ucenterSessionExpired`）。
+- 登录：`POST /zb_users/plugin/mochu_us/cmd.php?act=verify`
+  （`username` / `password`(MD5) / `vercode` / `savedate`），验证码图
+  `GET …/function/yanzhengcode.php?r=<random>`；退出 `GET …/cmd.php?act=logout`。
+  回包 `code=1` 出错、`code=2` 需跳转（带 `href`）、其余为成功；
+  **登录是 302，请求要 `followRedirects: false` 才能把 Set-Cookie 交给 CookieManager**。
+- 每日签到：状态 `POST json/Get.php {csrfToken, act: 'MemTs'}` → `{code:0, data:{giod, qian,
+  gong}}`（`qian == 0` = 今天还没签）；签到 `POST …/mochu_us/cmd.php?act=qiandao`（无参数）
+  → `{code:1, msg}` 失败、其余成功并带最新 `giod`。**App 静默完成，不再有签到菜单**：
+  启动时若已是登录态、以及登录成功后，各补当天这一签（先查状态，避免重复写）；成功不提示，
+  只有失败才在屏幕中间弹一次 tip，且**同一天只弹一次**（详见
+  `lib/services/check_in_service.dart`）。
+- 规则行（我的关注 3 个位 + 6 个筛选频道 + 全局服务端/用户端）：
+  `json/userfilter_fun.php`，`channel` ∈ `guanzhu1..3`/`shouye`/`douban`/`weibo`/`haodan`/
+  `zhidemai`/`bangdan`/`global`/`globallist`；act = `list`/`edit_html`/`switchs`/`deldata`/`selectdel`。
+  `edit_html` 返回**服务端渲染的表单**，App 解析字段后原生渲染并按原名回传。
+- 基本设置 6 页 + 商品转链 3 页：`POST json/shezhi_fun.php?type=<filter>&csrfToken=…`，
+  body 就是页面表单字段（`meta_*`）；当前值在对应 `views/Shezhi_*.php` 片段里。
+- 资料/头像/密码/绑定：`json/Get.php`，act = `postdata`（资料）/`UserImgList`+`UserImgSave`
+  （头像）/`newpassword`（改密，字段 `pass`/`newpass`/`newpass_s`）/`bangemail_isemail`+
+  `bangemail_vfcode`（绑邮箱）/`Jieemail_isemail`+`Jieemail_vfcode`（解绑）/`commDel`
+  （删评论）/`GongDanClose`（关工单）/`CollDel`（取消收藏）。
+- 流水账单：`views/Liushuilist.php` 里的服务端 HTML 表格。
+
+**登录态与 Cookie（App 侧）**：登录改成原生之后，会话由 `HttpClient` 的**持久化 CookieJar**
+（`PersistCookieJar`，`main()` 里初始化）承载，重启仍在；老版本留在 WebView Cookie 存储里的
+会话由 `CookieBridge.migrateFromWebView()` 一次性搬迁。`checkLoginState()` 返回
+`bool?`（null = 网络异常/未知），只有确定未登录才清会话，避免离线冷启动被静默登出。
+
+Flutter 侧实现：`lib/services/ucenter_service.dart`（接口）、`lib/models/ucenter*.dart`
+（片段与表单解析）、`lib/pages/profile/*`（页面）、`lib/pages/login/login_page.dart`（原生登录）。
+
+### 7.1 尚未原生化（下一轮）
+
+- **推送设置**：独立插件 `POST /zb_users/plugin/xbpush/api/channel.php`（act：`list`/`edit_save`/
+  `test`/`diagnose`/`preview`/`log_list`/`log_clear`/`rulestats`/`rsskey`/`import`…），19 种渠道
+- **商品转链**：`shezhi_fun.php`（`zhuanlian_taobao` / `zhuanlian_jingdong` / `zhuanlian_pinduoduo`）
+- 历史筛选数据查看（`views/Shaixuan_history.php`）
+
+这三块目前 App 内点开是用系统浏览器打开网站页面。
 
 ### 8. 搜索
 
@@ -469,7 +516,7 @@ savedate  : 保持天数（默认 30）
 |---|---|
 | Cookie 存储 | 浏览器标准 Cookie |
 | 登录 Cookie | mochu_us 插件设置，`savedate` 控制有效期 |
-| 共享需求 | Dio HTTP 请求与 WebView 必须共享 Cookie |
+| 共享需求 | 持久化 CookieJar（`PersistCookieJar`）承载会话，重启保持登录 |
 | 实现 | `webview_flutter` Cookie 与 Dio CookieJar 互通 |
 
 ---
@@ -484,8 +531,8 @@ savedate  : 保持天数（默认 30）
 | 评论列表 | HTML 解析（详情页内） | 同文章详情 |
 | 发评论 | 局部 WebView | `POST /zb_system/cmd.php?act=cmt` |
 | 搜索 | HTML 解析 | `POST /zb_system/cmd.php?act=search?q={kw}` |
-| 登录 | WebView | `/login.html` |
-| 用户中心 | WebView + Flutter按钮 | `/login.html`（已登录） |
+| 登录 | JSON API（原生表单） | `POST /zb_users/plugin/mochu_us/cmd.php?act=verify` |
+| 用户中心 | 服务端片段 + JSON 控制器（原生页面） | 见第 7 节 |
 | 排行榜 | JSON API（可选） | `GET /plus/json/rank/*.json` |
 
 ---
@@ -495,7 +542,7 @@ savedate  : 保持天数（默认 30）
 1. **Referer 策略**：网站使用 `no-referrer`，图片等资源不会发送 Referer。
 2. **域名白名单**：JS 中有域名检测，非白名单域名会强制跳转到 `new.xianbao.fun`。Flutter 的 WebView 中 URL 需保持在白名单域名内。
 3. **首页缓存**：首页由服务端缓存生成，约 1 分钟更新一次。`push.json` 为实时增量数据。
-4. **验证码**：登录需要图形验证码（计算题），建议用 WebView 处理。
+4. **验证码**：登录需要图形验证码（计算题），App 下载图片后由用户填答案。
 5. **防 CSRF Key**：发评论需要文章详情页中的 `key` 参数，每次请求不同。
 6. **密码加密**：前端使用 MD5 加密密码后传输。
 7. **搜索结果分页**：搜索结果页的 pagebar 中分页 URL 格式需实际验证。

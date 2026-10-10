@@ -3,11 +3,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/app_state.dart';
+import '../services/check_in_service.dart';
+import '../services/session_store.dart';
 import 'home/home_page.dart';
 import 'search/search_page.dart';
 import 'login/login_page.dart';
 import 'profile/profile_page.dart';
-import '../utils/cookie_bridge.dart';
+import '../widgets/center_tip.dart';
 import '../widgets/update_dialog.dart';
 
 /// Main app shell with bottom navigation bar.
@@ -51,6 +53,9 @@ class _MainShellState extends State<MainShell> {
   /// tapping a tab restores it.
   bool _navVisible = true;
 
+  /// 上一次看到的登录态，用来捕捉「未登录 → 已登录」这个跳变（补当天签到）。
+  bool _wasLoggedIn = false;
+
   @override
   void initState() {
     super.initState();
@@ -72,15 +77,37 @@ class _MainShellState extends State<MainShell> {
   }
 
   Future<void> _initializeSession() async {
-    await CookieBridge.syncFromWebView();
+    await SessionStore.restore();
     if (!mounted) return;
     final appState = context.read<AppState>();
     appState.markSessionReady();
+    // 登录态判定；一旦判定为「已登录」，下面的监听会顺带补当天那一次签到。
     unawaited(appState.refreshLoginState(refreshOnLoginChange: false));
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final appState = context.watch<AppState>();
+    final loggedIn = appState.isLoggedIn;
+    if (loggedIn && !_wasLoggedIn) {
+      // 两个入口都会走到这里：启动时就已经是登录态、以及刚在登录页登录成功。
+      // 未登录不会触发（未登录跳过签到）。
+      _wasLoggedIn = true;
+      unawaited(_runSilentCheckIn());
+    } else if (!loggedIn) {
+      _wasLoggedIn = false;
+    }
+  }
+
+  /// 静默签到：成功不提示，只有真的失败（且当天还没提示过）才在屏幕中间弹一条 tip。
+  Future<void> _runSilentCheckIn() async {
+    final tip = await CheckInCoordinator.attempt();
+    if (!mounted || tip == null) return;
+    showCenterTip(context, tip);
+  }
+
   Future<void> _refreshHomeSession(AppState appState) async {
-    await CookieBridge.syncFromWebView();
     appState.refreshHomeContent();
     unawaited(appState.refreshLoginState(refreshOnLoginChange: false));
   }

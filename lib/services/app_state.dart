@@ -1,7 +1,7 @@
 import 'package:flutter/foundation.dart';
-import '../services/http_client.dart';
 import '../services/api_service.dart';
 import 'home_cache_service.dart';
+import 'session_store.dart';
 
 /// Global app state: login status, current page index.
 class AppState extends ChangeNotifier {
@@ -39,6 +39,10 @@ class AppState extends ChangeNotifier {
   }
 
   /// Check and update login state.
+  ///
+  /// A network failure leaves the state untouched ([ApiService.isLoggedIn]
+  /// reports "unknown"): the session now lives in a file-backed cookie jar, so
+  /// treating an offline cold start as "logged out" would silently drop it.
   Future<void> refreshLoginState({
     bool refreshHome = false,
     bool refreshOnLoginChange = true,
@@ -46,6 +50,7 @@ class AppState extends ChangeNotifier {
     final api = ApiService();
     final loggedIn = await api.isLoggedIn();
     _sessionReady = true;
+    if (loggedIn == null) return;
     final loginChanged = loggedIn != _isLoggedIn;
     if (loginChanged) {
       _isLoggedIn = loggedIn;
@@ -63,22 +68,20 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Called after successful login in WebView.
-  /// Increments loginVersion so listeners (e.g. HomePage) can re-fetch
-  /// with the new cookies that carry category filter preferences.
+  /// Called after a successful native login. Increments loginVersion so
+  /// listeners (e.g. HomePage) re-fetch with the new cookies that carry
+  /// category filter preferences.
   Future<void> onLoginSuccess() async {
     _isLoggedIn = true;
     _loginVersion++;
     notifyListeners();
   }
 
-  /// Called after logout.
-  void onLogout() {
+  /// Called after logout: drops the server session and every stored cookie.
+  Future<void> onLogout() async {
     _isLoggedIn = false;
-    // Clear the direct login cookie header so subsequent requests
-    // are unauthenticated.
-    HttpClient().setLoginCookieHeader(null);
     _loginVersion++;
     notifyListeners();
+    await SessionStore.logout();
   }
 }

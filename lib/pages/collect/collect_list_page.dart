@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../models/article.dart';
 import '../../services/api_service.dart';
-import '../../utils/error_message.dart';
-import '../../widgets/load_error_view.dart';
+import '../../widgets/paged_list.dart';
 import '../article/article_detail_page.dart';
 
 /// User collect list page (native list of 收藏管理).
@@ -15,60 +14,13 @@ class CollectListPage extends StatefulWidget {
 
 class _CollectListPageState extends State<CollectListPage> {
   final ApiService _api = ApiService();
-  final List<CollectListItem> _items = [];
-  bool _loading = true;
-  bool _loadingMore = false;
-  String? _error;
-  int _page = 1;
-  int _total = 0;
-  static const int _limit = 20;
-
-  bool get _hasMore => _items.length < _total;
+  final PagedListController<CollectListItem> _listController =
+      PagedListController<CollectListItem>();
 
   @override
-  void initState() {
-    super.initState();
-    _load(reset: true);
-  }
-
-  Future<void> _load({bool reset = false}) async {
-    if (reset) {
-      setState(() {
-        _loading = true;
-        _error = null;
-        _page = 1;
-      });
-    } else {
-      if (_loadingMore || !_hasMore) return;
-      setState(() => _loadingMore = true);
-    }
-
-    try {
-      final page = reset ? 1 : _page + 1;
-      final result = await _api.fetchCollectList(page: page, limit: _limit);
-      if (!mounted) return;
-      setState(() {
-        if (reset) {
-          _items
-            ..clear()
-            ..addAll(result.items);
-        } else {
-          _items.addAll(result.items);
-        }
-        _page = page;
-        _total = result.total;
-        _loading = false;
-        _loadingMore = false;
-        _error = null;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _loading = false;
-        _loadingMore = false;
-        _error = friendlyErrorMessage(e);
-      });
-    }
+  void dispose() {
+    _listController.dispose();
+    super.dispose();
   }
 
   Future<void> _uncollect(CollectListItem item) async {
@@ -102,10 +54,7 @@ class _CollectListPageState extends State<CollectListPage> {
       ),
     );
     if (result.ok) {
-      setState(() {
-        _items.removeWhere((e) => e.collectId == item.collectId);
-        if (_total > 0) _total -= 1;
-      });
+      _listController.removeWhere((e) => e.collectId == item.collectId);
     }
   }
 
@@ -124,87 +73,29 @@ class _CollectListPageState extends State<CollectListPage> {
     );
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (_) => ArticleDetailPage(article: article),
-      ),
+      MaterialPageRoute(builder: (_) => ArticleDetailPage(article: article)),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('收藏管理'),
-        centerTitle: true,
-      ),
-      body: _buildBody(theme),
-    );
-  }
-
-  Widget _buildBody(ThemeData theme) {
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    if (_error != null && _items.isEmpty) {
-      return LoadErrorView(
-        message: _error!,
-        onRetry: () => _load(reset: true),
-      );
-    }
-    if (_items.isEmpty) {
-      return Center(
-        child: Text(
-          '暂无收藏',
-          style: theme.textTheme.bodyLarge?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
+      appBar: AppBar(title: const Text('收藏管理'), centerTitle: true),
+      body: PagedList<CollectListItem>(
+        controller: _listController,
+        emptyText: '暂无收藏',
+        loader: (page, limit) => _api.fetchCollectList(page: page, limit: limit),
+        itemBuilder: (context, item, index) => ListTile(
+          title: Text(item.title, maxLines: 2, overflow: TextOverflow.ellipsis),
+          subtitle: item.postTime.isEmpty
+              ? null
+              : Text('收藏时间：${item.postTime}'),
+          onTap: () => _openArticle(item),
+          trailing: TextButton(
+            onPressed: () => _uncollect(item),
+            child: const Text('取消收藏'),
           ),
         ),
-      );
-    }
-
-    return RefreshIndicator(
-      onRefresh: () => _load(reset: true),
-      child: ListView.separated(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        itemCount: _items.length + (_hasMore || _loadingMore ? 1 : 0),
-        separatorBuilder: (context, index) => const Divider(height: 1),
-        itemBuilder: (context, index) {
-          if (index >= _items.length) {
-            if (!_loadingMore) {
-              // Trigger load more once footer is built.
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                _load(reset: false);
-              });
-            }
-            return const Padding(
-              padding: EdgeInsets.all(16),
-              child: Center(
-                child: SizedBox(
-                  width: 24,
-                  height: 24,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-              ),
-            );
-          }
-          final item = _items[index];
-          return ListTile(
-            title: Text(
-              item.title,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-            subtitle: item.postTime.isEmpty
-                ? null
-                : Text('收藏时间：${item.postTime}'),
-            onTap: () => _openArticle(item),
-            trailing: TextButton(
-              onPressed: () => _uncollect(item),
-              child: const Text('取消收藏'),
-            ),
-          );
-        },
       ),
     );
   }
