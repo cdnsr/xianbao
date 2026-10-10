@@ -70,7 +70,10 @@ class HttpClient {
               'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
           'Referer': '$baseUrl/',
           'Accept': 'text/html, application/xhtml+xml, */*',
-          'Accept-Encoding': 'identity',
+          // No explicit `Accept-Encoding`: `dart:io` then negotiates gzip and
+          // transparently inflates the body. Forcing `identity` (as this used to
+          // do) meant every list page came down as ~220KB of HTML instead of
+          // ~42KB, which is most of why loading articles felt slow.
         },
       ),
     );
@@ -106,9 +109,11 @@ class HttpClient {
     await cookieJar.deleteAll();
   }
 
-  /// Decode response bytes to UTF-8 string. Bypasses Dio's response
-  /// processing entirely, which avoids issues with chunked transfer
-  /// encoding and gzip on certain server configurations.
+  /// Decode response bytes to UTF-8 string.
+  ///
+  /// Requests ask for `ResponseType.bytes` so the body reaches us exactly as
+  /// `dart:io` handed it over (already gunzipped when the server compressed it)
+  /// instead of going through Dio's string transformer.
   String _decodeBytes(List<int> bytes) {
     return utf8.decode(bytes, allowMalformed: true);
   }
