@@ -5,6 +5,7 @@ import '../../services/ucenter_service.dart';
 import '../../utils/error_message.dart';
 import '../../widgets/load_error_view.dart';
 import '../../widgets/ucenter_form_view.dart';
+import '../../widgets/text_tip.dart';
 
 /// 一个基本设置页的描述：视图片段、保存用的 `type`、展示文案。
 class UcenterSettingsSpec {
@@ -182,8 +183,10 @@ class _SettingsFormPageState extends State<SettingsFormPage> {
       final message = result.message.isNotEmpty
           ? result.message
           : (result.ok ? '已保存' : '保存失败');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(message)),
+      showTextTip(
+        context,
+        message,
+        duration: result.ok ? const Duration(seconds: 1) : kErrorTipDuration,
       );
       if (!result.ok) setState(() => _error = message);
     } catch (e) {

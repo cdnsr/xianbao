@@ -5,6 +5,7 @@ import '../../models/ucenter_form.dart';
 import '../../services/ucenter_service.dart';
 import '../../utils/error_message.dart';
 import '../../widgets/load_error_view.dart';
+import '../../widgets/text_tip.dart';
 
 /// 历史筛选数据（只读）。
 ///
@@ -53,9 +54,7 @@ class _FilterHistoryPageState extends State<FilterHistoryPage> {
   Future<void> _copy(UcenterReadonlyField field) async {
     await Clipboard.setData(ClipboardData(text: field.value));
     if (!mounted) return;
-    final messenger = ScaffoldMessenger.of(context);
-    messenger.hideCurrentSnackBar();
-    messenger.showSnackBar(const SnackBar(content: Text('已复制')));
+    showTextTip(context, '已复制');
   }
 
   @override

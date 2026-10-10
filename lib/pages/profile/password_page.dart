@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../../services/ucenter_service.dart';
 import '../../utils/error_message.dart';
+import '../../widgets/text_tip.dart';
 
 /// 重置密码（`Get.php act=newpassword`）。
 class PasswordPage extends StatefulWidget {
@@ -63,10 +64,9 @@ class _PasswordPageState extends State<PasswordPage> {
       if (result.ok) {
         // 改密成功：让密码管理器（Bitwarden 等）提示更新保存的密码。
         TextInput.finishAutofillContext();
-        final messenger = ScaffoldMessenger.of(context);
-        messenger.hideCurrentSnackBar();
-        messenger.showSnackBar(
-          SnackBar(content: Text(result.message.isEmpty ? '密码已修改' : result.message)),
+        showTextTip(
+          context,
+          result.message.isEmpty ? '密码已修改' : result.message,
         );
         Navigator.pop(context, true);
         return;

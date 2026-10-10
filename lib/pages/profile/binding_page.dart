@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../services/ucenter_service.dart';
 import '../../utils/error_message.dart';
 import '../../utils/external_link.dart';
+import '../../widgets/text_tip.dart';
 
 /// 认证绑定：邮箱绑定/解绑（短信式 6 位验证码）与 QQ 绑定入口。
 ///
@@ -96,12 +97,13 @@ class _BindingPageState extends State<BindingPage> {
         result.message.isNotEmpty
             ? result.message
             : (result.ok ? '验证码已发送' : '发送失败'),
+        isError: !result.ok,
       );
       if (result.ok) _startCooldown();
     } catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
-      _showMessage(friendlyErrorMessage(e));
+      _showMessage(friendlyErrorMessage(e), isError: true);
     }
   }
 
@@ -109,7 +111,7 @@ class _BindingPageState extends State<BindingPage> {
     if (_busy) return;
     final code = _code.text.trim();
     if (code.length != 6) {
-      _showMessage('请输入 6 位验证码');
+      _showMessage('请输入 6 位验证码', isError: true);
       return;
     }
     setState(() => _busy = true);
@@ -123,6 +125,7 @@ class _BindingPageState extends State<BindingPage> {
         result.message.isNotEmpty
             ? result.message
             : (result.ok ? '操作成功' : '操作失败'),
+        isError: !result.ok,
       );
       if (result.ok) {
         setState(() {
@@ -135,15 +138,16 @@ class _BindingPageState extends State<BindingPage> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
-      _showMessage(friendlyErrorMessage(e));
+      _showMessage(friendlyErrorMessage(e), isError: true);
     }
   }
 
-  void _showMessage(String message) {
-    final messenger = ScaffoldMessenger.of(context);
-    messenger.hideCurrentSnackBar();
-    messenger.showSnackBar(
-      SnackBar(content: Text(message), duration: const Duration(seconds: 2)),
+  /// 操作回执用轻量文字提示：成功 1 秒、失败略长（够看清原因）。
+  void _showMessage(String message, {bool isError = false}) {
+    showTextTip(
+      context,
+      message,
+      duration: isError ? kErrorTipDuration : const Duration(seconds: 1),
     );
   }
 

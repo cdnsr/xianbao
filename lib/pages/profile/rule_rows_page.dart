@@ -4,6 +4,7 @@ import '../../models/ucenter_form.dart';
 import '../../services/ucenter_service.dart';
 import '../../utils/error_message.dart';
 import '../../widgets/load_error_view.dart';
+import '../../widgets/text_tip.dart';
 import 'rule_editor_sheet.dart';
 
 /// 一个筛选页的规则行列表（我的关注三个位、各筛选频道共用）。
@@ -107,12 +108,13 @@ class _RuleRowsPageState extends State<RuleRowsPage> {
         _replaceRow(row.id, enabled: row.rule.enabled);
         _showMessage(
           result.message.isEmpty ? '更新失败' : result.message,
+          isError: true,
         );
       }
     } catch (e) {
       if (!mounted) return;
       _replaceRow(row.id, enabled: row.rule.enabled);
-      _showMessage(friendlyErrorMessage(e));
+      _showMessage(friendlyErrorMessage(e), isError: true);
     } finally {
       if (mounted) setState(() => _busyIds.remove(row.id));
     }
@@ -168,14 +170,17 @@ class _RuleRowsPageState extends State<RuleRowsPage> {
       if (!mounted) return;
       if (!result.ok) {
         setState(() => _rows = backup);
-        _showMessage(result.message.isEmpty ? '删除失败' : result.message);
+        _showMessage(
+          result.message.isEmpty ? '删除失败' : result.message,
+          isError: true,
+        );
         return;
       }
       _showMessage(result.message.isEmpty ? '已删除' : result.message);
     } catch (e) {
       if (!mounted) return;
       setState(() => _rows = backup);
-      _showMessage(friendlyErrorMessage(e));
+      _showMessage(friendlyErrorMessage(e), isError: true);
     }
   }
 
@@ -195,11 +200,12 @@ class _RuleRowsPageState extends State<RuleRowsPage> {
     _prefetchEditorForm();
   }
 
-  void _showMessage(String message) {
-    final messenger = ScaffoldMessenger.of(context);
-    messenger.hideCurrentSnackBar();
-    messenger.showSnackBar(
-      SnackBar(content: Text(message), duration: const Duration(seconds: 2)),
+  /// 操作回执用轻量文字提示：成功 1 秒、失败略长（够看清原因）。
+  void _showMessage(String message, {bool isError = false}) {
+    showTextTip(
+      context,
+      message,
+      duration: isError ? kErrorTipDuration : const Duration(seconds: 1),
     );
   }
 

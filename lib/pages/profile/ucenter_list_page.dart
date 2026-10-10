@@ -5,6 +5,7 @@ import '../../models/ucenter_table.dart';
 import '../../services/ucenter_service.dart';
 import '../../widgets/paged_list.dart';
 import '../article/article_detail_page.dart';
+import '../../widgets/text_tip.dart';
 
 /// 用户中心的通用列表页：评论管理 / 工单系统 / 已购订单 / 系统通知。
 ///
@@ -53,7 +54,7 @@ class _UcenterListPageState extends State<UcenterListPage> {
   Future<void> _runAction(UcenterTableRow row) async {
     final id = row.actionId;
     if (id == null || id.isEmpty) {
-      _showMessage('这条记录没有可操作的编号');
+      _showMessage('这条记录没有可操作的编号', isError: true);
       return;
     }
     final (title, confirmLabel, action) = switch (_spec.action) {
@@ -95,19 +96,21 @@ class _UcenterListPageState extends State<UcenterListPage> {
         result.message.isNotEmpty
             ? result.message
             : (result.ok ? '操作成功' : '操作失败'),
+        isError: !result.ok,
       );
       if (result.ok) _listController.reload();
     } catch (e) {
       if (!mounted) return;
-      _showMessage('$e');
+      _showMessage('$e', isError: true);
     }
   }
 
-  void _showMessage(String message) {
-    final messenger = ScaffoldMessenger.of(context);
-    messenger.hideCurrentSnackBar();
-    messenger.showSnackBar(
-      SnackBar(content: Text(message), duration: const Duration(seconds: 1)),
+  /// 操作回执用轻量文字提示：成功 1 秒、失败略长（够看清原因）。
+  void _showMessage(String message, {bool isError = false}) {
+    showTextTip(
+      context,
+      message,
+      duration: isError ? kErrorTipDuration : const Duration(seconds: 1),
     );
   }
 

@@ -5,6 +5,7 @@ import '../../services/ucenter_service.dart';
 import '../../utils/error_message.dart';
 import '../../widgets/load_error_view.dart';
 import '../../widgets/ucenter_form_view.dart';
+import '../../widgets/text_tip.dart';
 
 /// 打开规则行编辑页；返回 true 表示已保存。
 ///
@@ -116,19 +117,16 @@ class _RuleEditorPageState extends State<RuleEditorPage> {
       if (!mounted) return;
       setState(() => _saving = false);
       if (result.ok) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(result.message.isEmpty ? '已保存' : result.message),
-          ),
+        showTextTip(
+          context,
+          result.message.isEmpty ? '已保存' : result.message,
         );
         Navigator.pop(context, true);
         return;
       }
       final message = result.message.isEmpty ? '保存失败' : result.message;
       setState(() => _error = message);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
+      showTextTip(context, message, duration: kErrorTipDuration);
     } catch (e) {
       if (!mounted) return;
       setState(() {

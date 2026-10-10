@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../services/ucenter_service.dart';
 import '../../utils/error_message.dart';
 import '../../widgets/load_error_view.dart';
+import '../../widgets/text_tip.dart';
 
 /// 基本资料（`views/Data.php` 表单 + `Get.php act=postdata`）。
 ///
@@ -97,24 +98,18 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
       });
       if (!mounted) return;
       setState(() => _saving = false);
-      final messenger = ScaffoldMessenger.of(context);
-      messenger.hideCurrentSnackBar();
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            result.message.isNotEmpty
-                ? result.message
-                : (result.ok ? '资料已保存' : '保存失败'),
-          ),
-        ),
+      showTextTip(
+        context,
+        result.message.isNotEmpty
+            ? result.message
+            : (result.ok ? '资料已保存' : '保存失败'),
+        duration: result.ok ? const Duration(seconds: 1) : kErrorTipDuration,
       );
       if (result.ok) Navigator.pop(context, true);
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(friendlyErrorMessage(e))),
-      );
+      showTextTip(context, friendlyErrorMessage(e), duration: kErrorTipDuration);
     }
   }
 

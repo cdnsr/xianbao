@@ -4,6 +4,7 @@ import '../../services/ucenter_service.dart';
 import '../../utils/error_message.dart';
 import '../../widgets/load_error_view.dart';
 import '../../widgets/remote_image.dart';
+import '../../widgets/text_tip.dart';
 
 /// 修改图像：网站给一组预设头像，选一个保存（`Get.php act=UserImgList/UserImgSave`）。
 class AvatarPickerPage extends StatefulWidget {
@@ -66,24 +67,18 @@ class _AvatarPickerPageState extends State<AvatarPickerPage> {
       final result = await _service.saveAvatar(url);
       if (!mounted) return;
       setState(() => _saving = false);
-      final messenger = ScaffoldMessenger.of(context);
-      messenger.hideCurrentSnackBar();
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            result.message.isEmpty
-                ? (result.ok ? '头像已更新' : '头像更新失败')
-                : result.message,
-          ),
-        ),
+      showTextTip(
+        context,
+        result.message.isEmpty
+            ? (result.ok ? '头像已更新' : '头像更新失败')
+            : result.message,
+        duration: result.ok ? const Duration(seconds: 1) : kErrorTipDuration,
       );
       if (result.ok) Navigator.pop(context, true);
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(friendlyErrorMessage(e))),
-      );
+      showTextTip(context, friendlyErrorMessage(e), duration: kErrorTipDuration);
     }
   }
 

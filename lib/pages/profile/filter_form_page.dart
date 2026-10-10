@@ -5,6 +5,7 @@ import '../../services/ucenter_service.dart';
 import '../../utils/error_message.dart';
 import '../../widgets/load_error_view.dart';
 import '../../widgets/ucenter_form_view.dart';
+import '../../widgets/text_tip.dart';
 
 /// 整表单式筛选页（排行榜单筛选）。
 ///
@@ -94,9 +95,11 @@ class _FilterFormPageState extends State<FilterFormPage> {
       final message = result.message.isNotEmpty
           ? result.message
           : (result.ok ? '已保存' : '保存失败');
-      ScaffoldMessenger.of(
+      showTextTip(
         context,
-      ).showSnackBar(SnackBar(content: Text(message)));
+        message,
+        duration: result.ok ? const Duration(seconds: 1) : kErrorTipDuration,
+      );
       if (!result.ok) {
         setState(() => _error = message);
         return;
