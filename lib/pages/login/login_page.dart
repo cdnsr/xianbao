@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../services/app_state.dart';
 import '../../services/ucenter_service.dart';
@@ -101,6 +102,9 @@ class _LoginPageState extends State<LoginPage> {
       if (result.ok) {
         // 新会话：丢掉上一个账号留下的用户中心令牌。
         UcenterService.resetSession();
+        // 告诉系统「这次自动填充到此结束」：Bitwarden 这类管理器据此弹出
+        // 「保存 / 更新密码」。失败分支不调用，填充上下文保持可用。
+        TextInput.finishAutofillContext();
         await widget.appState.onLoginSuccess();
         return;
       }
@@ -167,23 +171,36 @@ class _LoginPageState extends State<LoginPage> {
               ),
             ),
             const SizedBox(height: 28),
-            TextField(
-              controller: _username,
-              textInputAction: TextInputAction.next,
-              autocorrect: false,
-              decoration: const InputDecoration(
-                labelText: '用户名',
-                prefixIcon: Icon(Icons.person_outline),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _password,
-              obscureText: true,
-              textInputAction: TextInputAction.next,
-              decoration: const InputDecoration(
-                labelText: '密码',
-                prefixIcon: Icon(Icons.lock_outline),
+            // AutofillGroup + autofillHints：让系统的自动填充（Bitwarden 等密码
+            // 管理器）把这两个框识别成一次登录，提供填充；登录成功后再
+            // TextInput.finishAutofillContext() 触发「保存 / 更新密码」。
+            AutofillGroup(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: _username,
+                    textInputAction: TextInputAction.next,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    autofillHints: const [AutofillHints.username],
+                    decoration: const InputDecoration(
+                      labelText: '用户名',
+                      prefixIcon: Icon(Icons.person_outline),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _password,
+                    obscureText: true,
+                    textInputAction: TextInputAction.next,
+                    autofillHints: const [AutofillHints.password],
+                    decoration: const InputDecoration(
+                      labelText: '密码',
+                      prefixIcon: Icon(Icons.lock_outline),
+                    ),
+                  ),
+                ],
               ),
             ),
             const SizedBox(height: 12),

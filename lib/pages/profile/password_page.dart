@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../services/ucenter_service.dart';
 import '../../utils/error_message.dart';
@@ -60,6 +61,8 @@ class _PasswordPageState extends State<PasswordPage> {
       if (!mounted) return;
       setState(() => _saving = false);
       if (result.ok) {
+        // 改密成功：让密码管理器（Bitwarden 等）提示更新保存的密码。
+        TextInput.finishAutofillContext();
         final messenger = ScaffoldMessenger.of(context);
         messenger.hideCurrentSnackBar();
         messenger.showSnackBar(
@@ -85,21 +88,25 @@ class _PasswordPageState extends State<PasswordPage> {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(title: const Text('重置密码'), centerTitle: true),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-        children: [
-          TextField(
-            controller: _old,
-            obscureText: true,
-            decoration: const InputDecoration(
-              labelText: '原有密码',
-              prefixIcon: Icon(Icons.lock_outline),
+      // AutofillGroup + 提示：密码管理器可以填充原密码，并在改密成功后提示更新。
+      body: AutofillGroup(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+          children: [
+            TextField(
+              controller: _old,
+              obscureText: true,
+              autofillHints: const [AutofillHints.password],
+              decoration: const InputDecoration(
+                labelText: '原有密码',
+                prefixIcon: Icon(Icons.lock_outline),
             ),
           ),
           const SizedBox(height: 16),
           TextField(
             controller: _new,
             obscureText: true,
+            autofillHints: const [AutofillHints.newPassword],
             decoration: const InputDecoration(
               labelText: '新密码',
               prefixIcon: Icon(Icons.lock_reset_outlined),
@@ -109,6 +116,7 @@ class _PasswordPageState extends State<PasswordPage> {
           TextField(
             controller: _confirm,
             obscureText: true,
+            autofillHints: const [AutofillHints.newPassword],
             decoration: const InputDecoration(
               labelText: '确认新密码',
               prefixIcon: Icon(Icons.check_circle_outline),
@@ -135,6 +143,7 @@ class _PasswordPageState extends State<PasswordPage> {
                 : const Text('确认修改'),
           ),
         ],
+        ),
       ),
     );
   }

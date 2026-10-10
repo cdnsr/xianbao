@@ -219,6 +219,9 @@ class _BindingPageState extends State<BindingPage> {
             TextField(
               controller: _email,
               keyboardType: TextInputType.emailAddress,
+              autocorrect: false,
+              enableSuggestions: false,
+              autofillHints: const [AutofillHints.email],
               decoration: const InputDecoration(
                 labelText: '邮箱地址',
                 prefixIcon: Icon(Icons.alternate_email),
