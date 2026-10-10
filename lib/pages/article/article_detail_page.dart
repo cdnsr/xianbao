@@ -115,8 +115,16 @@ class _ArticleDetailPageState extends State<ArticleDetailPage> {
     );
   }
 
-  bool _ensureLoggedIn() {
+  /// 收藏前确认登录态。
+  ///
+  /// 本地标记可能是过期的（例如登录后状态被一次「登录前发出、登录后才回来」的探测
+  /// 覆盖成未登录），所以标记为未登录时先跟服务端核一次，别把已经登录的用户挡在门外；
+  /// 确实没登录才提示并跳登录页。
+  Future<bool> _ensureLoggedIn() async {
     final appState = context.read<AppState>();
+    if (appState.isLoggedIn) return true;
+    await appState.refreshLoginState();
+    if (!mounted) return false;
     if (appState.isLoggedIn) return true;
     _snack('请先登录后再收藏');
     appState.goToLoginTab();
@@ -131,7 +139,8 @@ class _ArticleDetailPageState extends State<ArticleDetailPage> {
       _snack('无法识别文章 ID');
       return;
     }
-    if (!_ensureLoggedIn()) return;
+    if (!await _ensureLoggedIn()) return;
+    if (!mounted) return;
 
     setState(() => _collectBusy = true);
     try {

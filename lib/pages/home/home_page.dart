@@ -176,8 +176,13 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  void _openCollectList() {
+  Future<void> _openCollectList() async {
     final appState = context.read<AppState>();
+    if (!appState.isLoggedIn) {
+      // 本地标记可能是过期的：先跟服务端核一次再决定要不要挡人。
+      await appState.refreshLoginState();
+      if (!mounted) return;
+    }
     if (!appState.isLoggedIn) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('请先登录后查看收藏')),

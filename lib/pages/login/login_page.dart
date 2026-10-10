@@ -105,6 +105,18 @@ class _LoginPageState extends State<LoginPage> {
         // 告诉系统「这次自动填充到此结束」：Bitwarden 这类管理器据此弹出
         // 「保存 / 更新密码」。失败分支不调用，填充上下文保持可用。
         TextInput.finishAutofillContext();
+        // 跟服务端核一次会话是否真的生效：Cookie 没落上的话，用户会在别的页面
+        // 莫名被判「未登录」，这里直接告诉他重试，而不是假装登录成功。
+        final sessionOk = await widget.appState.verifySessionAfterLogin();
+        if (!mounted) return;
+        if (!sessionOk) {
+          setState(() {
+            _submitting = false;
+            _error = '登录成功但会话未生效，请重试';
+          });
+          await _loadCaptcha();
+          return;
+        }
         await widget.appState.onLoginSuccess();
         return;
       }
