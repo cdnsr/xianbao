@@ -35,6 +35,12 @@ git push origin v1.5.0
 - 上游 stable 一升级就会校验更严的 Gradle/AGP/Kotlin 下限。v1.5.14 第一次构建
   就是因为 stable 跳到 3.50.0（要求 Gradle ≥ 9.3.1、AGP ≥ 9.1.1、Kotlin ≥ 2.4.10）
   而失败。升级顺序：先升 Android 侧三个版本，再改 Flutter 版本号。
+- Runner 钉 `ubuntu-24.04`（`ubuntu-latest` 2026-10-19 起迁到 26.04）。
+- 用到的 action 都已在 Node 24 运行时上：`actions/checkout@v7`、
+  `actions/setup-java@v6`、`softprops/action-gh-release@v3`；
+  `subosito/flutter-action@v2` 是 composite，不涉及 Node 运行时。
+  旧的 `checkout@v4` / `setup-java@v4` / `action-gh-release@v2` 会被 GitHub 在
+  Actions 页标 Node 20 弃用警告。
 
 产物命名：
 
