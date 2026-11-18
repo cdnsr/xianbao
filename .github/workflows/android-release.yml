@@ -61,15 +61,16 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           # 版本钉死：发版链路必须可复现，不能让上游 stable 自己漂。
-          # v1.5.14 第一次构建就是这么挂的——stable 从 3.47.7 跳到 3.50.0，
-          # 而 3.50 要求 Gradle >= 9.3.1 / AGP >= 9.1.1 / Kotlin >= 2.4.10，
-          # 本仓库还是 Gradle 9.1.0 + AGP 9.0.1 + Kotlin 2.3.20，直接
-          # 「Your project's Gradle version (9.1.0) is lower than Flutter's
-          #   minimum supported version of 9.3.1」失败。
-          # 3.47.7 是 v1.5.13 成功发版用的版本，与现有 Android 配置匹配。
-          # 想升 Flutter 时：先按新版模板升 android/gradle/wrapper 的 Gradle、
-          # settings.gradle.kts 里的 AGP / Kotlin，再改这里的版本号。
-          flutter-version: "3.47.7"
+          # 历史上 stability 漂移直接挂过构建：stable 从 3.47.7 跳到 3.50.0 时，
+          # 3.50 把下限提到 Gradle >= 9.3.1 / AGP >= 9.1.1 / Kotlin >= 2.4.10，
+          # 而仓库当时还是 Gradle 9.1.0 + AGP 9.0.1 + Kotlin 2.3.20。
+          #
+          # 现在与 Android 侧一起升到了 3.50.0，配套：
+          #   Gradle 9.5.0 / AGP 9.3.1 / Kotlin 2.4.20 / JDK 17
+          # （即 Flutter 3.50 模板的默认组合）。
+          # 以后再升 Flutter：先按新版模板升 android/gradle/wrapper 的 Gradle、
+          # settings.gradle.kts 里的 AGP / Kotlin，再改这里的版本号，单独发一版验证。
+          flutter-version: "3.50.0"
           cache: true
 
       - name: Flutter doctor
