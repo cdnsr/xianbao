@@ -225,6 +225,10 @@ jobs:
 
       - name: Write version back to main
         shell: bash
+        env:
+          # 附注 tag 的说明（与 Release 页「本次更新」同一份）。多行内容走 env
+          # 传递，别在 run 里插值，否则引号/换行会把脚本搞坏。
+          TAG_NOTES: ${{ steps.version.outputs.notes }}
         run: |
           set -euo pipefail
           version_name="${{ steps.version.outputs.version_name }}"
@@ -241,7 +245,11 @@ jobs:
 
           short_sha="$(echo '${{ github.sha }}' | cut -c1-7)"
           export VERSION_NAME="$version_name"
-          export VERSION_DESC="$(printf '线报酷 %s\n由 tag %s 自动构建（%s）\n推荐下载 armv8 安装包。' "$version_name" '${{ github.ref_name }}' "$short_sha")"
+          # desc 就是 App 更新弹窗里的「更新说明」，必须带上这次改了什么，
+          # 不能只写版本号和构建来源（脚本里拼：摘要 + 由 tag … 自动构建）。
+          export VERSION_NOTES="$TAG_NOTES"
+          export VERSION_TAG='${{ github.ref_name }}'
+          export VERSION_SHA="$short_sha"
           python3 scripts/ci_update_version_json.py
 
           git add pubspec.yaml publish/version.json

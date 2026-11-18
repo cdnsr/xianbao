@@ -27,6 +27,11 @@ git push origin v1.5.0
 
 - `versionCode` = `max(pubspec 旧值+1, github.run_number)`，保证单调递增
 - Release 发布后回写仓库：`chore: bump version to x.y.z [skip ci]`（pubspec 内部仍写 `x.y.z+code` 供 Android versionCode 使用）
+- `publish/version.json` 的 `desc` = **附注 tag 的说明（更新摘要）+ 构建来源**，
+  App 更新弹窗的「更新说明」就是原样显示它（`lib/widgets/update_dialog.dart`）。
+  所以 tag 说明既是 Release 页的「本次更新」，也是客户端看到的更新内容；
+  写一句「修复若干问题」用户就只能看到这一句。轻量 tag（无说明）会退回
+  「线报酷 x.y.z」，摘要由 `scripts/ci_update_version_json.py` 拼装。
 
 工具链版本（**不要改回浮动的 `channel: stable`**）：
 
