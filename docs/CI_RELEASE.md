@@ -28,6 +28,14 @@ git push origin v1.5.0
 - `versionCode` = `max(pubspec 旧值+1, github.run_number)`，保证单调递增
 - Release 发布后回写仓库：`chore: bump version to x.y.z [skip ci]`（pubspec 内部仍写 `x.y.z+code` 供 Android versionCode 使用）
 
+工具链版本（**不要改回浮动的 `channel: stable`**）：
+
+- Flutter 钉死在 `3.47.7`（见 `android-release.yml`），与当前 Android 配置匹配：
+  Gradle 9.1.0 / AGP 9.0.1 / Kotlin 2.3.20 / JDK 17。
+- 上游 stable 一升级就会校验更严的 Gradle/AGP/Kotlin 下限。v1.5.14 第一次构建
+  就是因为 stable 跳到 3.50.0（要求 Gradle ≥ 9.3.1、AGP ≥ 9.1.1、Kotlin ≥ 2.4.10）
+  而失败。升级顺序：先升 Android 侧三个版本，再改 Flutter 版本号。
+
 产物命名：
 
 - `xianbao-v{versionName}-armv8-release.apk`（真机推荐，如 `xianbao-v1.5.0-armv8-release.apk`）
