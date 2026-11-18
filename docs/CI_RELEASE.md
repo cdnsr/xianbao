@@ -36,7 +36,11 @@ git push origin v1.5.0
 工具链版本（**不要改回浮动的 `channel: stable`**）：
 
 - Flutter 钉死在 `3.50.0`（见 `android-release.yml`），配套 Android 配置：
-  Gradle 9.5.0 / AGP 9.3.1 / Kotlin 2.4.20 / JDK 17（Flutter 3.50 模板默认组合）。
+  Gradle 9.5.0 / AGP 9.3.1 / Kotlin 2.4.20 / **JDK 21**。
+- **JDK 必须是 21**：AGP 9.3 的 lint 用到了 Java 21 的 SequencedCollection
+  （`List.removeLast()`），在 JDK 17 上跑会 `NoSuchMethodError` 并让
+  `lintVitalAnalyzeRelease` 失败（v1.5.16 第一次构建就挂在这）。跑 Gradle 用
+  JDK 21，产物字节码仍是 JVM 17（`jvmTarget = JVM_17`），不影响兼容性。
 - Flutter 每个版本都会校验 Gradle/AGP/Kotlin 下限，低于下限直接构建失败。
   3.50 的下限是 Gradle ≥ 9.3.1、AGP ≥ 9.1.1、Kotlin ≥ 2.4.10（v1.5.14 第一次
   构建就是挂在 Gradle 9.1.0 上）。升级顺序：先升 Android 侧三个版本，再改
