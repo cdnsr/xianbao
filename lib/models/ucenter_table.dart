@@ -55,7 +55,7 @@ class UcenterTableRow {
   }
 }
 
-/// 一页表格数据；[needLogin] 为真表示会话失效（服务端 code 1001）。
+/// 一页表格数据；[needLogin] 为真表示会话失效（服务端 `code` 100 / 1001）。
 class UcenterTablePage {
   final int total;
   final List<UcenterTableRow> rows;
@@ -76,7 +76,9 @@ class UcenterTablePage {
     final decoded = jsonDecode(body);
     if (decoded is! Map) return UcenterTablePage.empty;
     final code = decoded['code'];
-    final needLogin = code == 1001 || code == '1001';
+    // 掉登录：早期是 1001，2026-11 起插件接口统一回 100（「您的登录已到期…」）。
+    final needLogin =
+        code == 1001 || code == '1001' || code == 100 || code == '100';
     final list = decoded['data'] is List
         ? (decoded['data'] as List)
               .whereType<Map>()

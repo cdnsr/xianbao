@@ -146,6 +146,12 @@ class _ArticleDetailPageState extends State<ArticleDetailPage> {
     try {
       final result = await _api.toggleCollect(id);
       if (!mounted) return;
+      if (result.csrfExpired) {
+        // 令牌已经自动换过一次还是过期（会话刚被顶掉之类），让用户再点一次；
+        // 这时把用户赶去登录页是错的——错误码和「未登录」一样都是 1。
+        _snack('操作已过期，请重试');
+        return;
+      }
       if (result.needLogin) {
         _snack(result.message.isNotEmpty ? result.message : '请先登录后再收藏');
         context.read<AppState>().goToLoginTab();
@@ -162,7 +168,7 @@ class _ArticleDetailPageState extends State<ArticleDetailPage> {
             : (result.isCollected ? '收藏成功' : '已取消收藏'),
       );
     } catch (e) {
-      _snack('收藏失败: $e');
+      _snack('收藏失败：${friendlyErrorMessage(e)}');
     } finally {
       if (mounted) setState(() => _collectBusy = false);
     }

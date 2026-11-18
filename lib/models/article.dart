@@ -507,12 +507,21 @@ class CollectListItem {
 
 /// Result of toggling article collect state.
 class CollectToggleResult {
-  /// Website codes: 0 = now collected, 1 = need login, other = uncollected.
+  /// Website codes: 0 = now collected, 2 = now uncollected, 1 = error.
   final int code;
   final String message;
   final int size;
+
+  /// 需要登录（`code: 1` 且不是令牌过期）。
   final bool needLogin;
   final bool isCollected;
+
+  /// 服务端说 csrf 令牌过期（`csrf_expired: 1` / 「网页已过期…」）。
+  ///
+  /// 与「需要登录」共用 `code: 1`，必须分开判：把它当成掉登录会把已登录的用户
+  /// 赶去登录页，而实际只需要换令牌重试（`UcenterService` 已经重试过一次，
+  /// 走到这里说明重试也没成功）。
+  final bool csrfExpired;
 
   const CollectToggleResult({
     required this.code,
@@ -520,18 +529,42 @@ class CollectToggleResult {
     required this.size,
     required this.needLogin,
     required this.isCollected,
+    this.csrfExpired = false,
   });
+
+  /// 回包不是可解析的 JSON 时的失败结果。
+  factory CollectToggleResult.failure({
+    required int code,
+    required String message,
+    required bool csrfExpired,
+  }) => CollectToggleResult(
+    code: code,
+    message: message,
+    size: 0,
+    needLogin: false,
+    isCollected: false,
+    csrfExpired: csrfExpired,
+  );
 
   factory CollectToggleResult.fromJson(Map<String, dynamic> json) {
     final code = ArticleListItem._asInt(json['code']) ?? -1;
     final size = (json['size'] as num?)?.toInt() ?? 0;
     final msg = json['msg']?.toString() ?? '';
+    final flag = json['csrf_expired'];
+    final csrfExpired =
+        flag == true ||
+        flag == 1 ||
+        flag == '1' ||
+        flag == 'true' ||
+        msg.contains('网页已过期') ||
+        msg.contains('网页已经过期');
     return CollectToggleResult(
       code: code,
       message: msg,
       size: size,
-      needLogin: code == 1,
+      needLogin: code == 1 && !csrfExpired,
       isCollected: code == 0,
+      csrfExpired: csrfExpired,
     );
   }
 }

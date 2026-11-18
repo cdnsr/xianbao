@@ -326,6 +326,23 @@ JSON 结构与 push.json 相同。
 | 正文 | `div.article-content` | 含 `<br>`, `<a>`, `<img>` 等富文本 |
 | 评论数 | `span.comment` | 数字 |
 
+#### 4.1 收藏按钮（文章页）
+
+**类型：JSON（POST 表单）**
+
+| 项 | 值 |
+|---|---|
+| 开关收藏 | `POST /zb_users/plugin/mochu_us/function_user.php?act=addshoucang` |
+| 参数 | `id`（文章 ID）+ **`csrfToken`（会话令牌，必须）** |
+| 回包 | `{"code":0,"msg":"收藏成功","size":1}` 已收藏 / `{"code":2,"msg":"取消成功","size":0}` 已取消 / `{"code":1,"msg":…}` 出错 |
+| 按钮状态 | `POST …/function_user.php?act=article_cache`，`{id, buts:'true'}` → `{code:0, buts:"<div>…<button …>收藏 \\| 0</button></div>"}`（**不要令牌**） |
+
+> **2026-11 变更**：`addshoucang` 开始校验 csrf 令牌。不带令牌时回
+> `{"code":1,"csrf_expired":1,"msg":"网页已过期，请手动刷新整个页面！"}`——这就是
+> App 里「点收藏提示网页已经过期」的原因（登录态本身是好的）。令牌取法见 7 节
+> 的「csrf 令牌」行，与用户中心是同一个；`csrf_expired` / 「网页已过期」要当作
+> 「换令牌重试」，**不能**当成掉登录（两者错误码都是 `code: 1`）。
+
 ---
 
 ### 5. 评论
@@ -449,14 +466,18 @@ savedate  : 保持天数（默认 30）
 
 ### 7. 用户中心
 
-用户中心是 mochu_us 插件的 layui SPA（`/Ucenter` 只是个壳），页面与数据分三处：
+用户中心是 mochu_us 插件的 SPA（`/Ucenter` 只是个壳），页面与数据分三处：
+
+> 2026-11 起壳页换成了 Vue 打包产物（`/zb_users/plugin/mochu_us/art/assets/index-*.js`，
+> 会话信息在 `window.__UC_BOOT__` 里），但**下面的片段/JSON 接口没变**，App 仍然
+> 直接调它们；唯一受影响的是 csrf 令牌的取法（见下表）。
 
 | 用途 | 接口 | 说明 |
 |---|---|---|
 | 页面片段 | `POST /zb_users/plugin/mochu_us/src/views/<View>.php` | 表单 `{v: '3.70', routs}`，返回 HTML 片段（首页统计、Nav、各设置页表单、流水表格） |
 | 分页表格 | `POST /zb_users/plugin/mochu_us/json/List.php` | `{csrfToken, act, page, limit}` → `{code, count, data[]}`；act：`CollList`/`CommentList`/`GongDanList`/`BuyPostList`/`TongZhiXiList` |
 | 写操作 | `POST /zb_users/plugin/mochu_us/json/{Get,userfilter_fun,shezhi_fun}.php` | 见下 |
-| csrf 令牌 | `GET /Ucenter` 里的 `basecrsfcode:'…'` | 会话级；掉登录/令牌过期返回 `code: 1001` |
+| csrf 令牌 | `GET /zb_users/plugin/mochu_us/json/csrf.php` → `{code:0,data:"<32 位>"}` | 会话级，用户中心与文章页收藏共用。**2026-11 变更**：旧的 `/Ucenter` 内联 `basecrsfcode:'…'` 已移除，壳页改成 `window.__UC_BOOT__={…,"csrf":"…"}`（兜底可读这里）。未登录回 `code: 100`，令牌也可能是 32 个 0 |
 
 **关键接口**
 
@@ -571,5 +592,8 @@ Flutter 侧实现：`lib/services/ucenter_service.dart`（接口）、`lib/model
 3. **首页缓存**：首页由服务端缓存生成，约 1 分钟更新一次。`push.json` 为实时增量数据。
 4. **验证码**：登录需要图形验证码（计算题），App 下载图片后由用户填答案。
 5. **防 CSRF Key**：发评论需要文章详情页中的 `key` 参数，每次请求不同。
-6. **密码加密**：前端使用 MD5 加密密码后传输。
-7. **搜索结果分页**：搜索结果页的 pagebar 中分页 URL 格式需实际验证。
+6. **csrfToken**：用户中心与文章页收藏的写操作要会话令牌，取 `json/csrf.php`
+   （见 7 节）。令牌失效回「网页已过期…」（收藏接口另带 `csrf_expired: 1`），
+   刷新令牌重试即可；掉登录回 `code: 100`（早期是 1001）。
+7. **密码加密**：前端使用 MD5 加密密码后传输。
+8. **搜索结果分页**：搜索结果页的 pagebar 中分页 URL 格式需实际验证。

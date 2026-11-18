@@ -18,10 +18,16 @@ class UcenterResult {
   final String message;
   final String raw;
 
+  /// csrf 令牌失效：服务端回「网页已过期，请手动刷新整个页面！」，收藏这类
+  /// 插件接口还会额外带 `csrf_expired: 1`。换新令牌重试即可，不该当成操作失败
+  /// （更不该当成掉登录——两种错误码都是 `code: 1`）。
+  final bool csrfExpired;
+
   const UcenterResult({
     required this.code,
     required this.message,
     required this.raw,
+    this.csrfExpired = false,
   });
 
   static const UcenterResult empty = UcenterResult(
@@ -32,12 +38,9 @@ class UcenterResult {
 
   bool get ok => code == 0;
 
-  /// 会话失效：网站用 1001 表示没登录 / 令牌过期。
-  bool get needLogin => code == 1001;
-
-  /// csrf 令牌失效：服务端回「网页已过期，请手动刷新整个页面！」（实测文案）。
-  /// 这种情况刷新令牌重试即可，不该当成操作失败。
-  bool get tokenExpired => message.contains('网页已过期');
+  /// 会话失效：网站用 1001 表示没登录 / 令牌过期，2026-11 起插件接口改回
+  /// `code: 100`（「您的登录已到期，或已在其它地方登录」），两个都要认。
+  bool get needLogin => code == 1001 || code == 100;
 
   factory UcenterResult.fromText(String body) {
     if (body.trim().isEmpty) return UcenterResult.empty;
@@ -45,16 +48,28 @@ class UcenterResult {
       final decoded = jsonDecode(body);
       if (decoded is! Map) return UcenterResult.empty;
       final code = decoded['code'];
+      final message = decoded['msg']?.toString() ?? '';
       return UcenterResult(
         code: code is num ? code.toInt() : int.tryParse('$code') ?? -1,
-        message: decoded['msg']?.toString() ?? '',
+        message: message,
         raw: body,
+        csrfExpired:
+            _isTruthyFlag(decoded['csrf_expired']) ||
+            _looksLikeCsrfExpired(message),
       );
     } on FormatException {
       return UcenterResult.empty;
     }
   }
 }
+
+/// 服务端「网页已过期」的文案（用户中心是「网页已过期，请手动刷新整个页面！」，
+/// 收藏接口偶尔回「网页已经过期，请重新刷新网页」），两种都要认。
+bool _looksLikeCsrfExpired(String message) =>
+    message.contains('网页已过期') || message.contains('网页已经过期');
+
+bool _isTruthyFlag(Object? value) =>
+    value == true || value == 1 || value == '1' || value == 'true';
 
 /// 登录结果：`code == 1` 是出错（验证码/账号密码），`2` 是服务端要求跳转，
 /// 其余视为成功（与网站 `cmd.php?act=verify` 的约定一致）。
@@ -307,8 +322,12 @@ class UcenterAvatarOption {
 ///  - `…/src/views/*.php`：服务端渲染的页面片段（首页统计、导航、各设置页表单）
 ///  - `…/json/List.php`：分页表格
 ///  - `…/json/Get.php`、`userfilter_fun.php`、`shezhi_fun.php`：写操作与表单
-/// 都需要 `GET /Ucenter` 里那个 `basecrsfcode` 令牌；令牌按会话缓存，遇到
-/// 「未登录/令牌失效」会强制刷新一次再重试。
+/// 都需要会话 csrf 令牌（2026-11 起由 `json/csrf.php` 单独下发，见
+/// [HttpClient.fetchCsrfToken]）；令牌按会话缓存，遇到「未登录/令牌失效」会强制
+/// 刷新一次再重试。
+///
+/// 文章页的收藏按钮（`…/function_user.php?act=addshoucang`）用的也是同一个令牌，
+/// 所以也放在这里（见 [toggleCollect]）。
 class UcenterService {
   final HttpClient _client = HttpClient();
 
@@ -325,8 +344,15 @@ class UcenterService {
 
   Future<String> _ensureCsrf({bool forceRefresh = false}) async {
     if (!forceRefresh && _csrfLoaded && _csrf != null) return _csrf!;
-    final token = await _client.fetchUserCenterCsrfToken();
+    // 令牌优先问 `json/csrf.php`（网站自己也是这么取的，几十字节），拿不到再
+    // 退回壳页内联那份（旧版 `basecrsfcode` / 新版 `__UC_BOOT__.csrf`）。
+    var token = await _client.fetchCsrfToken();
+    token ??= await _client.fetchCsrfTokenFromShell();
     if (token == null || token.isEmpty) {
+      // 拿不到通常是掉登录（`csrf.php` 回 code 100），缓存也要清掉，
+      // 让下次登录后的第一次调用重新取。
+      _csrf = null;
+      _csrfLoaded = false;
       throw Exception('无法获取用户中心令牌，请重新登录');
     }
     _csrf = token;
@@ -335,29 +361,53 @@ class UcenterService {
   }
 
   /// 带令牌的表单 POST；服务端说没登录/令牌失效就换新令牌重试一次。
+  ///
+  /// [send] 负责真正的请求（用户中心的 `json/` 与插件根目录下的接口路径不同，
+  /// 令牌处理却完全一样），令牌由这里统一注入。
+  Future<UcenterResult> _postWithToken(
+    Future<String> Function(String token) send, {
+    bool retryOnAuthFailure = true,
+  }) async {
+    final token = await _ensureCsrf();
+    var result = UcenterResult.fromText(await send(token));
+    if (retryOnAuthFailure && (result.needLogin || result.csrfExpired)) {
+      final fresh = await _ensureCsrf(forceRefresh: true);
+      result = UcenterResult.fromText(await send(fresh));
+    }
+    return result;
+  }
+
   Future<UcenterResult> _postJson(
     String file, {
     required Map<String, dynamic> data,
     Map<String, dynamic>? query,
     bool retryOnAuthFailure = true,
-  }) async {
-    final token = await _ensureCsrf();
-    final body = await _client.postUcenterJson(
-      file,
-      query: query,
-      data: {...data, 'csrfToken': token},
-    );
-    var result = UcenterResult.fromText(body);
-    if (retryOnAuthFailure && (result.needLogin || result.tokenExpired)) {
-      await _ensureCsrf(forceRefresh: true);
-      final retryBody = await _client.postUcenterJson(
+  }) {
+    return _postWithToken(
+      (token) => _client.postUcenterJson(
         file,
         query: query,
-        data: {...data, 'csrfToken': _csrf},
-      );
-      result = UcenterResult.fromText(retryBody);
-    }
-    return result;
+        data: {...data, 'csrfToken': token},
+      ),
+      retryOnAuthFailure: retryOnAuthFailure,
+    );
+  }
+
+  /// 插件根目录下的接口（`mochu_us/function_user.php`），令牌与用户中心共用。
+  Future<UcenterResult> _postPlugin(
+    String file, {
+    required Map<String, dynamic> query,
+    required Map<String, dynamic> data,
+    bool retryOnAuthFailure = true,
+  }) {
+    return _postWithToken(
+      (token) => _client.postMochuPlugin(
+        file,
+        query: query,
+        data: {...data, 'csrfToken': token},
+      ),
+      retryOnAuthFailure: retryOnAuthFailure,
+    );
   }
 
   // ------------------------------------------------------------------ 登录
@@ -463,6 +513,20 @@ class UcenterService {
   /// 删除自己的评论。
   Future<UcenterResult> deleteComment(String id) =>
       _postJson('Get.php', data: {'act': 'commDel', 'id': id});
+
+  // ---------------------------------------------------------------- 收藏开关
+
+  /// 文章页的收藏开关（`function_user.php?act=addshoucang`，网站点按钮的同一个接口）。
+  ///
+  /// 回包：`code: 0` 已收藏（带 `size`）、`code: 2` 已取消收藏、`code: 1` 出错
+  /// （未登录 / `csrf_expired`）。**2026-11 起这个接口也校验 csrf 令牌**，缺令牌
+  /// 就回「网页已过期，请手动刷新整个页面！」——App 之前「点收藏提示网页已经过期」
+  /// 就是这么来的。令牌过期由 [_postWithToken] 自动刷新重试一次。
+  Future<UcenterResult> toggleCollect(int articleId) => _postPlugin(
+    'function_user.php',
+    query: const {'act': 'addshoucang'},
+    data: {'id': articleId.toString()},
+  );
 
   /// 关闭工单。
   Future<UcenterResult> closeTicket(String id) =>

@@ -132,6 +132,10 @@ const String _commentPageJson = r'''
 /// 会话失效（网站用 1001）。
 const String _needLoginJson = r'''{"code":1001,"msg":"请先登录","href":"/login.html"}''';
 
+/// 会话失效（2026-11 起线上实测：插件接口统一回 100）。
+const String _needLoginCode100Json =
+    r'''{"code":100,"msg":"您的登录已到期，或已在其它地方登录<br/>请重新登录！","href":"https://new.xianbao.fun/login.html"}''';
+
 /// 流水账单片段（服务端渲染的表格）。
 const String _liushuiFragment = r'''
 <div class="layui-card">
@@ -367,6 +371,12 @@ void main() {
       expect(page.rows, isEmpty);
     });
 
+    test('code 100 也是会话失效（2026-11 起插件接口的写法）', () {
+      final page = UcenterTablePage.fromJson(_needLoginCode100Json);
+      expect(page.needLogin, isTrue);
+      expect(page.rows, isEmpty);
+    });
+
     test('空响应不抛错', () {
       final page = UcenterTablePage.fromJson('');
       expect(page.rows, isEmpty);
@@ -453,6 +463,40 @@ void main() {
       // 空值条目也保留（页面显示为空），由页面过滤。
       expect(fields[2].value, '');
       expect(fields[2].isEmpty, isTrue);
+    });
+  });
+
+  group('UcenterResult（插件 JSON 回包）', () {
+    test('csrf 过期：code 1 + csrf_expired，既不算失败也不算掉登录', () {
+      final result = UcenterResult.fromText(
+        r'{"code":1,"csrf_expired":1,"msg":"网页已过期，请手动刷新整个页面！"}',
+      );
+      expect(result.csrfExpired, isTrue);
+      expect(result.needLogin, isFalse);
+      expect(result.ok, isFalse);
+    });
+
+    test('只有文案、没有 csrf_expired 字段时也认得出令牌过期', () {
+      final result = UcenterResult.fromText(
+        '{"code":1,"msg":"网页已经过期，请重新刷新网页"}',
+      );
+      expect(result.csrfExpired, isTrue);
+      expect(result.needLogin, isFalse);
+    });
+
+    test('code 100 = 掉登录', () {
+      final result = UcenterResult.fromText(_needLoginCode100Json);
+      expect(result.needLogin, isTrue);
+      expect(result.csrfExpired, isFalse);
+    });
+
+    test('成功回包不带任何过期标记', () {
+      final result = UcenterResult.fromText(
+        '{"code":0,"msg":"收藏成功","size":1}',
+      );
+      expect(result.ok, isTrue);
+      expect(result.needLogin, isFalse);
+      expect(result.csrfExpired, isFalse);
     });
   });
 

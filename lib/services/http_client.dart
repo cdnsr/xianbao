@@ -13,12 +13,15 @@ import 'dart:typed_data';
 String categoryPagePath(String slug, int page) =>
     page <= 1 ? '/category-$slug/' : '/category-$slug/$page/';
 
+/// 用户中心插件（mochu_us）的根目录：`src/views/` 是页面片段、`json/` 是 JSON
+/// 控制器，根下的 `function_user.php` 是文章页的收藏/点赞按钮接口。
+const String _ucenterPluginBase = '/zb_users/plugin/mochu_us/';
+
 /// Directory of the user center plugin's server-rendered view fragments.
-const String _ucenterViewBase =
-    '/zb_users/plugin/mochu_us/src/views/';
+const String _ucenterViewBase = '${_ucenterPluginBase}src/views/';
 
 /// JSON controllers of the same plugin (paged tables, form writes).
-const String _ucenterJsonBase = '/zb_users/plugin/mochu_us/json/';
+const String _ucenterJsonBase = '${_ucenterPluginBase}json/';
 
 /// Singleton Dio instance with cookie management, shared across the app.
 ///
@@ -337,6 +340,22 @@ class HttpClient {
     return postForm('$_ucenterJsonBase$file', data: data, queryParameters: query);
   }
 
+  /// POST a plugin-level controller that is not under `json/`
+  /// (`mochu_us/function_user.php` — 文章页的收藏按钮).
+  ///
+  /// Same form encoding as [postUcenterJson]; callers add `csrfToken` / `act`.
+  Future<String> postMochuPlugin(
+    String file, {
+    Map<String, dynamic>? query,
+    required Map<String, dynamic> data,
+  }) {
+    return postForm(
+      '$_ucenterPluginBase$file',
+      data: data,
+      queryParameters: query,
+    );
+  }
+
   /// In-memory image cache to avoid re-fetching on rebuild/scroll.
   static final Map<String, Uint8List> _imageCache = <String, Uint8List>{};
   static final Map<String, Future<Uint8List>> _inflightImages =
@@ -451,23 +470,26 @@ class HttpClient {
   }
 
   /// Toggle article collect via mochu_us addshoucang.
-  Future<String> toggleCollect(int articleId) {
-    return postForm(
-      '/zb_users/plugin/mochu_us/function_user.php',
-      queryParameters: const {'act': 'addshoucang'},
-      data: {'id': articleId.toString()},
+  ///
+  /// 2026-11 起服务端要求带会话 csrf 令牌（网站按钮传的是 `window.mochuUsCsrf`）。
+  /// 不带令牌时回 `{"code":1,"csrf_expired":1,"msg":"网页已过期，请手动刷新整个页面！"}`
+  /// ——就是 App 里「点收藏提示网页已经过期」的那条。
+  Future<String> toggleCollect(int articleId, {required String csrfToken}) {
+    return postMochuPlugin(
+      'function_user.php',
+      query: const {'act': 'addshoucang'},
+      data: {'id': articleId.toString(), 'csrfToken': csrfToken},
     );
   }
 
   /// Fetch AJAX-injected collect button HTML state.
+  ///
+  /// 这个接口**不要** csrf 令牌（网站 JS 也没带），只有写操作才要。
   Future<String> fetchArticleCacheButs(int articleId) {
-    return postForm(
-      '/zb_users/plugin/mochu_us/function_user.php',
-      queryParameters: const {'act': 'article_cache'},
-      data: {
-        'id': articleId.toString(),
-        'buts': 'true',
-      },
+    return postMochuPlugin(
+      'function_user.php',
+      query: const {'act': 'article_cache'},
+      data: {'id': articleId.toString(), 'buts': 'true'},
     );
   }
 
@@ -482,12 +504,39 @@ class HttpClient {
     );
   }
 
-  /// Read CSRF token from user center shell page.
-  Future<String?> fetchUserCenterCsrfToken() async {
+  /// 会话级 csrf 令牌（用户中心与文章页收藏共用同一个）。
+  ///
+  /// 网站 2026-11 换了发法：旧的 `/Ucenter` 内联 `basecrsfcode:'…'` 已经没有了，
+  /// 令牌改由插件的 `json/csrf.php` 单独下发（`{"code":0,"data":"<32 位>"}`），
+  /// 文章页的 `mochu_us.js`（`window.mochuUsCsrf`）和新版用户中心都从它取。
+  ///
+  /// 没登录时回 `code: 100`（「您的登录已到期…」），令牌也可能是 32 个 0，
+  /// 两种情况都按「拿不到令牌」返回 null；网络异常照常抛出，调用方好区分。
+  Future<String?> fetchCsrfToken() async {
+    final body = await getText('${_ucenterJsonBase}csrf.php');
+    if (body.trim().isEmpty) return null;
+    try {
+      final decoded = jsonDecode(body);
+      if (decoded is! Map) return null;
+      if ((decoded['code']?.toString() ?? '') != '0') return null;
+      final token = (decoded['data']?.toString() ?? '').trim();
+      if (token.isEmpty || RegExp(r'^0+$').hasMatch(token)) return null;
+      return token;
+    } on FormatException {
+      return null;
+    }
+  }
+
+  /// 兜底：从用户中心壳页里读令牌。
+  ///
+  /// 新版壳页把会话信息挂在 `window.__UC_BOOT__={…,"csrf":"…"}` 上，更早的版本
+  /// 是 `basecrsfcode:'…'`。只在 [fetchCsrfToken] 拿不到时用（壳页 ~11KB，
+  /// 常规路径不该为它多付一次下载）。
+  Future<String?> fetchCsrfTokenFromShell() async {
     final html = await getText('/Ucenter');
-    final match = RegExp(
-      r"basecrsfcode:'([^']+)'",
-    ).firstMatch(html);
-    return match?.group(1);
+    final boot = RegExp(r'"csrf"\s*:\s*"([^"]+)"').firstMatch(html);
+    if (boot != null) return boot.group(1);
+    final legacy = RegExp(r"basecrsfcode:'([^']+)'").firstMatch(html);
+    return legacy?.group(1);
   }
 }

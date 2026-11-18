@@ -381,10 +381,22 @@ class ApiService {
   /// logout.
   Future<bool?> isLoggedIn() => _client.checkLoginState();
 
-  /// Toggle collect for an article. code==1 means login required.
+  /// Toggle collect for an article.
+  ///
+  /// 接口要会话 csrf 令牌，令牌的缓存与过期重试都在 [UcenterService]（和用户中心
+  /// 共用同一个令牌），这里只负责把回包转成模型。
   Future<CollectToggleResult> toggleCollect(int articleId) async {
-    final raw = await _client.toggleCollect(articleId);
-    final json = jsonDecode(raw) as Map<String, dynamic>;
+    final result = await _ucenter.toggleCollect(articleId);
+    final json = _tryDecodeObject(result.raw);
+    if (json == null) {
+      // 回的不是 JSON（网关错误页之类）：按失败处理，但保留 csrf 过期标记，
+      // 让页面提示「重试」而不是把用户赶去登录。
+      return CollectToggleResult.failure(
+        code: result.code,
+        message: result.message,
+        csrfExpired: result.csrfExpired,
+      );
+    }
     return CollectToggleResult.fromJson(json);
   }
 
@@ -420,4 +432,15 @@ class ApiService {
   /// Cancel collect by collect-record id.
   Future<({bool ok, String message})> deleteCollect(String collectId) =>
       _ucenter.deleteCollect(collectId);
+}
+
+/// JSON 对象回包；空串或不是对象时返回 null。
+Map<String, dynamic>? _tryDecodeObject(String body) {
+  if (body.trim().isEmpty) return null;
+  try {
+    final decoded = jsonDecode(body);
+    return decoded is Map<String, dynamic> ? decoded : null;
+  } on FormatException {
+    return null;
+  }
 }
