@@ -69,12 +69,9 @@ class _ProfilePageState extends State<ProfilePage> {
       _error = null;
     });
     try {
-      final results = await Future.wait<Object>([
-        _service.fetchHome(),
-        _service.fetchProfile(),
-      ]);
+      // 先取看板：掉登录时它回 `code: 100`，比壳页跳登录更容易判定。
+      final home = await _service.fetchHome();
       if (!mounted) return;
-      final home = results[0] as UcenterHome;
       if (home.sessionExpired) {
         // 会话过期：提示，并让 AppState 重新判定登录态（第三个 Tab 会切回登录页）。
         setState(() {
@@ -86,9 +83,18 @@ class _ProfilePageState extends State<ProfilePage> {
         unawaited(widget.appState.refreshLoginState());
         return;
       }
+      // 壳页解析失败（例如被访问防护页拦住）不该把整页统计也拖垮：
+      // 头像/昵称留空，积分/收藏/评论照常展示。
+      var profile = UcenterProfile.empty;
+      try {
+        profile = await _service.fetchProfile();
+      } catch (_) {
+        profile = UcenterProfile.empty;
+      }
+      if (!mounted) return;
       setState(() {
         _home = home;
-        _profile = results[1] as UcenterProfile;
+        _profile = profile;
         _loading = false;
       });
     } catch (e) {
@@ -285,8 +291,12 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Widget _buildStats(ThemeData theme) {
+    // 等级不在看板接口里，来自壳页 `__UC_BOOT__.user`；取不到再退回看板统计。
+    final levelText = _profile.levelText.isNotEmpty
+        ? _profile.levelText
+        : _home.level;
     final items = <({String label, String value, VoidCallback onTap})>[
-      (label: '等级', value: _home.level, onTap: _openSpend),
+      (label: '等级', value: levelText, onTap: _openSpend),
       (label: '积分', value: _home.points, onTap: _openSpend),
       (label: '收藏', value: _home.collects, onTap: _openCollect),
     ];

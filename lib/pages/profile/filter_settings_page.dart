@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../services/ucenter_service.dart';
-import 'filter_form_page.dart';
-import 'history_page.dart';
 import 'rule_rows_page.dart';
+import 'ucenter_view_page.dart';
 
 /// 一个筛选入口：规则行页（表格）或整表单页。
 class _ChannelEntry {
@@ -13,19 +12,19 @@ class _ChannelEntry {
   /// 规则行页用：接口位置。
   final UcenterFilterTarget? target;
 
-  /// 整表单页用：视图片段名。
-  final String? formView;
+  /// 整表单页用：新版用户中心的哈希路由。
+  final String? route;
 
   const _ChannelEntry.rows({
     required this.title,
     required this.description,
     required UcenterFilterTarget this.target,
-  }) : formView = null;
+  }) : route = null;
 
   const _ChannelEntry.form({
     required this.title,
     required this.description,
-    required String this.formView,
+    required String this.route,
   }) : target = null;
 }
 
@@ -69,7 +68,7 @@ class FilterSettingsPage extends StatelessWidget {
     _ChannelEntry.form(
       title: '排行榜单筛选',
       description: '排行榜与热帖的筛选条件',
-      formView: 'bangdanfilter',
+      route: 'bangdanfilter',
     ),
     _ChannelEntry.rows(
       title: '全局列表筛选（服务端）',
@@ -106,7 +105,12 @@ class FilterSettingsPage extends StatelessWidget {
             trailing: const Icon(Icons.chevron_right, size: 18),
             onTap: () => Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => const FilterHistoryPage()),
+              MaterialPageRoute(
+                builder: (_) => const UcenterViewPage(
+                  route: 'Shaixuan_history',
+                  title: '历史筛选数据',
+                ),
+              ),
             ),
           ),
           const Divider(height: 1),
@@ -140,7 +144,6 @@ class FilterSettingsPage extends StatelessWidget {
 
   void _open(BuildContext context, _ChannelEntry entry) {
     final target = entry.target;
-    final view = entry.formView;
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -150,11 +153,9 @@ class FilterSettingsPage extends StatelessWidget {
                 title: entry.title,
                 hint: _hint,
               )
-            : FilterFormPage(
-                target: UcenterFilterTarget.bangdan,
-                view: view!,
+            : UcenterViewPage(
+                route: entry.route!,
                 title: entry.title,
-                hint: '保存后由服务端在排行榜上生效；条件之间是「或」的关系。',
               ),
       ),
     );

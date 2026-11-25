@@ -22,6 +22,7 @@ class SpendPage extends StatefulWidget {
 class _SpendPageState extends State<SpendPage> {
   final UcenterService _service = UcenterService();
   UcenterHome _home = UcenterHome.empty;
+  UcenterProfile _profile = UcenterProfile.empty;
   bool _loading = true;
   String? _error;
 
@@ -39,10 +40,25 @@ class _SpendPageState extends State<SpendPage> {
     try {
       final home = await _service.fetchHome();
       if (!mounted) return;
+      if (home.sessionExpired) {
+        setState(() {
+          _home = home;
+          _loading = false;
+          _error = kUcenterSessionExpiredMessage;
+        });
+        return;
+      }
+      var profile = UcenterProfile.empty;
+      try {
+        profile = await _service.fetchProfile();
+      } catch (_) {
+        profile = UcenterProfile.empty;
+      }
+      if (!mounted) return;
       setState(() {
         _home = home;
+        _profile = profile;
         _loading = false;
-        _error = home.sessionExpired ? kUcenterSessionExpiredMessage : null;
       });
     } catch (e) {
       if (!mounted) return;
@@ -88,7 +104,13 @@ class _SpendPageState extends State<SpendPage> {
             children: [
               _buildBalanceCard(theme, '积分', _home.points),
               const SizedBox(width: 8),
-              _buildBalanceCard(theme, '会员等级', _home.level),
+              _buildBalanceCard(
+                theme,
+                '会员等级',
+                _profile.levelText.isNotEmpty
+                    ? _profile.levelText
+                    : _home.level,
+              ),
             ],
           ),
         ),
@@ -256,7 +278,7 @@ class _LiuShuiPageState extends State<LiuShuiPage> {
       _error = null;
     });
     try {
-      final tables = await _service.fetchFragmentTables('Liushuilist');
+      final tables = await _service.fetchSpendTables();
       if (!mounted) return;
       setState(() {
         _tables = tables;

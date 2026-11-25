@@ -433,16 +433,58 @@ class UcenterService {
 
   // -------------------------------------------------------------- 首页统计
 
-  /// 用户中心首页：统计卡片 + 公告。
+  /// 用户中心首页：积分 / 收藏 / 评论统计 + 公告。
+  ///
+  /// 2026-11-25 网站改版后旧片段 `views/index.php` 已整体移除（302 → 404），
+  /// 改由 `Get.php act=IndexBoard` 下发 JSON 看板。
   Future<UcenterHome> fetchHome() async {
-    final html = await _client.postUcenterView('index');
-    return UcenterHome.parse(html);
+    final result = await _postJson('Get.php', data: {'act': 'IndexBoard'});
+    if (result.needLogin) return const UcenterHome(sessionExpired: true);
+    // 成功的看板回包只有 `{"data":{…}}`，没有 code；出错时才带 code/msg，
+    // 所以先看 data，再按错误处理，不能只依赖 UcenterResult.ok。
+    if (result.raw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(result.raw);
+        if (decoded is Map) {
+          final data = decoded['data'];
+          if (data is Map) {
+            return UcenterHome.fromBoard(
+              UcenterBoard.fromJson(Map<String, dynamic>.from(data)),
+            );
+          }
+        }
+      } on FormatException {
+        // 落到下面的错误处理。
+      }
+    }
+    if (result.raw.isEmpty) return UcenterHome.empty;
+    throw Exception(
+      result.message.isEmpty ? '用户中心数据加载失败' : result.message,
+    );
   }
 
-  /// 头像 / 昵称 / 等级标识。
+  /// 头像 / 昵称 / 等级标识 / 会员状态。
+  ///
+  /// 旧片段 `views/Nav.php` 已移除，改读壳页内联的 `window.__UC_BOOT__.user`
+  /// （见 [UcenterBoot]）。未登录时壳页 302 到登录页，解析不到 boot 数据。
   Future<UcenterProfile> fetchProfile() async {
-    final html = await _client.postUcenterView('Nav');
-    return parseUcenterProfile(html);
+    final boot = await fetchBoot();
+    final user = boot?.user;
+    if (boot == null || boot.guest || user == null) {
+      throw Exception(kUcenterSessionExpiredMessage);
+    }
+    return UcenterProfile.fromBoot(user);
+  }
+
+  /// 拉壳页的启动数据；顺带把壳页下发的 csrf 令牌写进缓存。
+  Future<UcenterBoot?> fetchBoot() async {
+    final html = await _client.fetchUcenterShell();
+    final boot = UcenterBoot.parse(html);
+    if (boot != null && !boot.guest && boot.csrf.isNotEmpty) {
+      _csrf = boot.csrf;
+      _csrfLoaded = true;
+    }
+    return boot;
   }
 
   // ---------------------------------------------------------------- 表格
@@ -619,13 +661,22 @@ class UcenterService {
       target.endpoint,
       data: target.params(act: 'edit_html', id: id),
     );
-    if (!result.ok) {
+    // 成功的回包只有 `{"html":"…"}`，没有 code；掉登录/参数错误才带 code/msg。
+    var html = '';
+    if (result.raw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(result.raw);
+        if (decoded is Map) html = decoded['html']?.toString() ?? '';
+      } on FormatException {
+        // 落到下面的错误处理。
+      }
+    }
+    if (html.isEmpty) {
+      if (result.needLogin) throw Exception(kUcenterSessionExpiredMessage);
       throw Exception(
         result.message.isEmpty ? '无法打开编辑表单' : result.message,
       );
     }
-    final decoded = jsonDecode(result.raw);
-    final html = decoded is Map ? decoded['html']?.toString() ?? '' : '';
     final form = UcenterForm.parse(html);
     // 服务端片段里的令牌是随页面下发的，保存时以当前会话令牌为准。
     final token = await _ensureCsrf();
@@ -690,6 +741,32 @@ class UcenterService {
 
   // -------------------------------------------------------------- 设置表单
 
+  /// 一次拉全所有设置项（`shezhi_fun.php?type=formget` 的 `meta`）。
+  ///
+  /// 2026-11-25 改版后设置页不再有 `views/Shezhi_*.php` 片段，当前值统一由
+  /// 这个接口下发；键名与旧表单字段一致（`Alias`、`jiben_fanye_pc` 等）。
+  Future<Map<String, dynamic>> fetchSettingsMeta() async {
+    final result = await _postJson(
+      'shezhi_fun.php',
+      query: const {'type': 'formget'},
+      data: const {},
+    );
+    if (result.needLogin) throw Exception(kUcenterSessionExpiredMessage);
+    if (!result.ok) {
+      throw Exception(result.message.isEmpty ? '设置加载失败' : result.message);
+    }
+    try {
+      final decoded = jsonDecode(result.raw);
+      if (decoded is! Map) return const <String, dynamic>{};
+      final meta = decoded['meta'];
+      return meta is Map
+          ? Map<String, dynamic>.from(meta)
+          : const <String, dynamic>{};
+    } on FormatException {
+      return const <String, dynamic>{};
+    }
+  }
+
   /// 取某个设置页视图片段里的当前值。
   ///
   /// 设置页没有 JSON 读接口，当前值就渲染在片段里（`value=` / `checked`）。
@@ -697,8 +774,10 @@ class UcenterService {
     required String view,
     required Iterable<String> names,
   }) async {
-    final html = await _client.postUcenterView(view);
-    return readValues(html, names);
+    final meta = await fetchSettingsMeta();
+    return {
+      for (final name in names) name: meta[name]?.toString() ?? '',
+    };
   }
 
   /// 保存设置页（`shezhi_fun.php?type=<filter>`）。
@@ -733,8 +812,17 @@ class UcenterService {
   /// 可选头像列表（`Get.php act=UserImgList` 返回一段 `<li><img>`）。
   Future<List<UcenterAvatarOption>> fetchAvatarOptions() async {
     final result = await _postJson('Get.php', data: {'act': 'UserImgList'});
-    if (!result.ok) return const <UcenterAvatarOption>[];
-    final html = (jsonDecode(result.raw) as Map)['html']?.toString() ?? '';
+    if (result.needLogin || result.raw.isEmpty) {
+      return const <UcenterAvatarOption>[];
+    }
+    // 成功回包只有 `{"html":"…"}`，没有 code；不能按 UcenterResult.ok 判断。
+    var html = '';
+    try {
+      final decoded = jsonDecode(result.raw);
+      if (decoded is Map) html = decoded['html']?.toString() ?? '';
+    } on FormatException {
+      return const <UcenterAvatarOption>[];
+    }
     final document = html_parser.parse(html);
     final options = <UcenterAvatarOption>[];
     for (final item in document.querySelectorAll('li')) {
@@ -769,31 +857,109 @@ class UcenterService {
     },
   );
 
-  /// 绑定邮箱第一步：给该邮箱发 6 位验证码。
-  Future<UcenterResult> requestBindEmail(String email) =>
-      _postJson('Get.php', data: {'act': 'bangemail_isemail', 'email': email});
+  /// 绑定邮箱第一步：校验邮箱并发送 6 位验证码。
+  ///
+  /// 2026-11-25 起拆成两步：`bangemail_isemail` 校验邮箱 → `bangemail_pstcode`
+  /// 真正发码（`code: 4044` 表示刚发过、冷却中，按成功处理）。
+  Future<UcenterResult> requestBindEmail(String email) async {
+    final check = await _postJson(
+      'Get.php',
+      data: {'act': 'bangemail_isemail', 'email': email},
+    );
+    if (!check.ok) return check;
+    final send = await _postJson(
+      'Get.php',
+      data: {'act': 'bangemail_pstcode'},
+    );
+    return _acceptResend(send);
+  }
 
   /// 绑定邮箱第二步：提交验证码。
   Future<UcenterResult> confirmBindEmail(String code) =>
       _postJson('Get.php', data: {'act': 'bangemail_vfcode', 'emailvfcode': code});
 
-  /// 解绑邮箱第一步：给已绑定的邮箱发验证码。
-  Future<UcenterResult> requestUnbindEmail() =>
-      _postJson('Get.php', data: {'act': 'Jieemail_isemail'});
+  /// 解绑邮箱第一步：校验并发送验证码（`Jieemail_isemail` → `Jieemail_pstcode`）。
+  Future<UcenterResult> requestUnbindEmail() async {
+    final check = await _postJson(
+      'Get.php',
+      data: {'act': 'Jieemail_isemail'},
+    );
+    if (!check.ok) return check;
+    final send = await _postJson(
+      'Get.php',
+      data: {'act': 'Jieemail_pstcode'},
+    );
+    return _acceptResend(send);
+  }
 
   /// 解绑邮箱第二步：提交验证码。
   Future<UcenterResult> confirmUnbindEmail(String code) =>
       _postJson('Get.php', data: {'act': 'Jieemail_vfcode', 'code': code});
 
-  /// 当前绑定的邮箱（从「认证绑定」页片段里读）。
+  /// `4044` = 验证码刚发过、还在冷却期，服务端视为已发送，不当失败。
+  UcenterResult _acceptResend(UcenterResult result) {
+    if (result.code == 4044) {
+      return UcenterResult(
+        code: 0,
+        message: result.message,
+        raw: result.raw,
+      );
+    }
+    return result;
+  }
+
+  /// 当前绑定的邮箱（`shezhi_fun.php?type=formget` 的 `Email` + `Isemail`）。
   Future<String> fetchBoundEmail() async {
-    final html = await _client.postUcenterView('Databangding');
-    final span = html_parser
-        .parse(html)
-        .querySelector('#emailnamespan')
-        ?.text
-        .trim();
-    return span ?? '';
+    final meta = await fetchSettingsMeta();
+    final verified = meta['Isemail']?.toString() == '1';
+    return verified ? (meta['Email']?.toString() ?? '') : '';
+  }
+
+  /// 流水账单：积分流水（`List.php act=LiuShuiList`）+ 充值记录
+  /// （`act=ChongList`）。
+  ///
+  /// 旧版是 `views/Liushuilist.php` 的服务端表格，2026-11-25 改版后片段移除，
+  /// 改用同一套 `List.php` 接口；字段取自网站新版 `Liushuilist` 页的映射。
+  Future<List<UcenterFragmentTable>> fetchSpendTables({int limit = 50}) async {
+    final liushui = await fetchTable(
+      act: 'LiuShuiList',
+      page: 1,
+      limit: limit,
+    );
+    final chong = await fetchTable(act: 'ChongList', page: 1, limit: limit);
+    if (liushui.needLogin || chong.needLogin) {
+      throw Exception(kUcenterSessionExpiredMessage);
+    }
+    return [
+      UcenterFragmentTable(
+        title: '积分流水',
+        headers: const ['积分', '类型', '状态', '时间', '备注', '单号'],
+        rows: [
+          for (final row in liushui.rows)
+            [
+              row.cell('Cent'),
+              row.cell('Act'),
+              row.cell('State'),
+              row.cell('Time'),
+              row.cell('Bei'),
+              row.cell('Orn'),
+            ],
+        ],
+      ),
+      UcenterFragmentTable(
+        title: '充值记录',
+        headers: const ['金额', '单号', '状态', '备注'],
+        rows: [
+          for (final row in chong.rows)
+            [
+              row.cell('Val'),
+              row.cell('Code').isEmpty ? row.cell('Ober') : row.cell('Code'),
+              row.cell('State'),
+              row.cell('Beis'),
+            ],
+        ],
+      ),
+    ];
   }
 
   /// 拉一个服务端渲染页面片段里的表格（流水账单这类没有 JSON 接口的页面）。

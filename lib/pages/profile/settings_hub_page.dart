@@ -16,7 +16,7 @@ class SettingsHubPage extends StatelessWidget {
     super.key,
     this.title = '基本设置',
     this.keys = ucenterBasicSettingsKeys,
-    this.note = '带会员标记的项在服务端只对会员开放，非会员的字段会以只读形式展示。',
+    this.note = '设置页由网站提供，App 内用内置网页打开；登录状态已自动同步。',
   });
 
   @override

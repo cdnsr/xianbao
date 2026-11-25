@@ -310,10 +310,27 @@ class HttpClient {
     return _decodeBytes(resp.data ?? []);
   }
 
+  /// Fetch the user center shell page (`GET /Ucenter`).
+  ///
+  /// 2026-11-25 起用户中心是 Vue 单页应用，壳页里内联 `window.__UC_BOOT__`
+  /// （用户 id/昵称/等级/头像/会员状态 + csrf 令牌）。未登录时服务端 302 到
+  /// `/login.html`，返回的是登录页，解析不到这段数据。
+  Future<String> fetchUcenterShell() async {
+    final resp = await dio.get<Uint8List>(
+      '/Ucenter',
+      options: Options(responseType: ResponseType.bytes),
+    );
+    return _decodeBytes(resp.data ?? []);
+  }
+
   /// POST one of the user center's server-rendered view fragments.
   ///
   /// Views live under `src/views/<name>.php` and are POST-only; they return the
   /// HTML the SPA injects (`index`, `Nav`, `Collectlist`, `Shezhi_jiben`, …).
+  ///
+  /// 注意：2026-11-25 网站改版后 `src/views/` 已整体移除（一律 302 → 404），
+  /// 用户中心数据改走 `json/Get.php` / `json/List.php` / `shezhi_fun.php`，
+  /// 这里只作为旧路径的兜底保留。
   Future<String> postUcenterView(String view, {String routs = ''}) async {
     final resp = await dio.post<Uint8List>(
       '$_ucenterViewBase$view.php',

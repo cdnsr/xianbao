@@ -468,6 +468,18 @@ savedate  : 保持天数（默认 30）
 
 用户中心是 mochu_us 插件的 SPA（`/Ucenter` 只是个壳），页面与数据分三处：
 
+> **2026-11-25 再次改版（v1.5.17 适配）**：`src/views/*.php` 视图片段已整体移除
+> （一律 302 → 404），新版 Vue 壳页把会话信息与菜单内联在
+> `window.__UC_BOOT__`，页面数据改走 JSON：
+> - 首页看板：`POST json/Get.php`，body `act=IndexBoard` → `{data:{giod,coll_count,comment_count,signed,notice,tui,loginlog…}}`
+> - 用户资料/等级/头像：壳页 `GET /Ucenter` 的 `__UC_BOOT__.user`（`id/name/level/levelName/vipLevelName/isvip/avatar`）与 `csrf`
+> - 设置当前值：`POST json/shezhi_fun.php?type=formget`（query 带 type）→ `{meta:{…}}`，键名与旧表单字段一致
+> - 流水：`POST json/List.php`，`act=LiuShuiList`（积分流水，字段 `Cent/Act/State/Time/Bei/Orn`）/ `act=ChongList`（充值记录，字段 `Val/Code/Ober/State/Beis`）
+> - 邮箱绑定：`bangemail_isemail` → `bangemail_pstcode`（发码，`code:4044` 表示冷却中）→ `bangemail_vfcode`；解绑同理 `Jieemail_*`
+> - 筛选规则行仍走 `json/userfilter_fun.php`：`list` 返回旧字段结构、`edit_html` 仍返回旧 HTML 表单，App 的规则行/编辑器继续可用
+> - 设置页与排行榜单/历史页的原生表单不再复刻，App 内改用内置 WebView 打开 `/Ucenter#/<路由>`（`Shezhi_jiben`、`Shezhi_zhuanlian`、`bangdanfilter`、`Shaixuan_history`…）
+
+
 > 2026-11 起壳页换成了 Vue 打包产物（`/zb_users/plugin/mochu_us/art/assets/index-*.js`，
 > 会话信息在 `window.__UC_BOOT__` 里），但**下面的片段/JSON 接口没变**，App 仍然
 > 直接调它们；唯一受影响的是 csrf 令牌的取法（见下表）。
